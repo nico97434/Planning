@@ -115,7 +115,8 @@ const Cloud = {
     applyRemoteData(data) {
         // Appliquer les données reçues du cloud sans déclencher de re-push
         if (!data) return;
-        state = data;
+        // Normaliser pour garantir que tous les champs existent (sinon plantage des renderers)
+        state = normalizeState(data);
         // Sauver localement aussi pour cache offline
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
         // Re-render tout
@@ -239,37 +240,66 @@ let state = loadState();
 // ============== UTILS ==============
 function uid(prefix = 'id') { return prefix + '_' + Math.random().toString(36).slice(2, 11); }
 
+function normalizeState(parsed) {
+    // Garantit que state a tous les champs attendus, même si les données viennent
+    // d'une version précédente, du cloud, ou d'un import. Évite les erreurs "undefined".
+    if (!parsed || typeof parsed !== 'object') return structuredClone(DEFAULT_STATE);
+    const merged = Object.assign(structuredClone(DEFAULT_STATE), parsed);
+    if (!merged.stations || typeof merged.stations !== 'object' || Object.keys(merged.stations).length === 0) {
+        merged.stations = structuredClone(DEFAULT_STATE.stations);
+        merged.currentStationId = 'st_default';
+    }
+    // Vérifier que currentStationId pointe vers une vraie station
+    if (!merged.stations[merged.currentStationId]) {
+        merged.currentStationId = Object.keys(merged.stations)[0];
+    }
+    Object.values(merged.stations).forEach(s => {
+        const def = defaultStationData(s.name || 'Station');
+        // Garantir tous les champs de base
+        for (const k in def) {
+            if (s[k] == null) s[k] = def[k];
+        }
+        // Garantir les tableaux qui doivent toujours exister
+        if (!Array.isArray(s.employees)) s.employees = [];
+        if (!Array.isArray(s.shiftTypes)) s.shiftTypes = def.shiftTypes;
+        if (!Array.isArray(s.roles)) s.roles = def.roles;
+        if (!Array.isArray(s.leaves)) s.leaves = [];
+        if (!Array.isArray(s.holidays)) s.holidays = [];
+        if (!Array.isArray(s.templates)) s.templates = [];
+        if (!s.shifts || typeof s.shifts !== 'object') s.shifts = {};
+        if (!s.requirements || typeof s.requirements !== 'object') s.requirements = def.requirements;
+        if (!s.openingHours || typeof s.openingHours !== 'object') s.openingHours = def.openingHours;
+        if (!s.settings) s.settings = def.settings;
+        else s.settings = Object.assign({}, def.settings, s.settings);
+
+        // Migration shiftTypes ancien format (start/end direct) -> nouveau (schedules par jour)
+        s.shiftTypes.forEach(st => {
+            if (!st.schedules && st.start && st.end) {
+                st.schedules = {
+                    weekday: { enabled: true, start: st.start, end: st.end },
+                    weekend: { enabled: true, start: st.start, end: st.end },
+                    holiday: { enabled: true, start: st.start, end: st.end }
+                };
+                delete st.start;
+                delete st.end;
+            } else if (!st.schedules) {
+                // shift sans aucun horaire → on met un défaut
+                st.schedules = {
+                    weekday: { enabled: true, start: '08:00', end: '16:00' },
+                    weekend: { enabled: true, start: '08:00', end: '16:00' },
+                    holiday: { enabled: true, start: '08:00', end: '16:00' }
+                };
+            }
+        });
+    });
+    return merged;
+}
+
 function loadState() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) return structuredClone(DEFAULT_STATE);
-        const parsed = JSON.parse(raw);
-        // Merge for forward compat
-        const merged = Object.assign(structuredClone(DEFAULT_STATE), parsed);
-        // Ensure each station has all fields
-        Object.values(merged.stations).forEach(s => {
-            const def = defaultStationData(s.name);
-            for (const k in def) {
-                if (s[k] == null) s[k] = def[k];
-            }
-            if (!s.settings) s.settings = def.settings;
-            else s.settings = Object.assign({}, def.settings, s.settings);
-            // Migration shiftTypes ancien format (start/end direct) -> nouveau (schedules par jour)
-            if (s.shiftTypes) {
-                s.shiftTypes.forEach(st => {
-                    if (!st.schedules && st.start && st.end) {
-                        st.schedules = {
-                            weekday: { enabled: true, start: st.start, end: st.end },
-                            weekend: { enabled: true, start: st.start, end: st.end },
-                            holiday: { enabled: true, start: st.start, end: st.end }
-                        };
-                        delete st.start;
-                        delete st.end;
-                    }
-                });
-            }
-        });
-        return merged;
+        return normalizeState(JSON.parse(raw));
     } catch (e) {
         console.warn('Error loading state', e);
         return structuredClone(DEFAULT_STATE);
@@ -392,6 +422,7 @@ function getShiftDisplayTime(shiftType) {
 
 function toast(message, type = 'info', duration = 3000) {
     const c = document.getElementById('toastContainer');
+    if (!c) { console.log('[toast]', type, message); return; }
     const el = document.createElement('div');
     el.className = `toast ${type}`;
     el.textContent = message;
@@ -612,6 +643,7 @@ function isOnLeave(empId, dateStr) {
 
 function renderPlanning() {
     const grid = document.getElementById('planningGrid');
+    if (!grid) return;
     const weekDates = getWeekDates();
     const today = formatDate(new Date());
     const search = document.getElementById('searchEmp')?.value.toLowerCase() || '';
@@ -2345,11 +2377,13 @@ function deleteRoleSetting() {
 function renderHolidaysList() {
     const s = S();
     const c = document.getElementById('holidaysList');
-    if (s.holidays.length === 0) {
+    if (!c) return;
+    const holidays = s.holidays || [];
+    if (holidays.length === 0) {
         c.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">Aucun jour férié configuré.</div>';
         return;
     }
-    const sorted = [...s.holidays].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...holidays].sort((a, b) => a.date.localeCompare(b.date));
     c.innerHTML = sorted.map((h, idx) => `
         <div class="holiday-item">
             <div></div>
