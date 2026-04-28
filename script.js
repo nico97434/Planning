@@ -407,12 +407,27 @@ function init() {
     if (!state.currentWeekStart) {
         state.currentWeekStart = formatDate(getMonday());
     } else {
-        // Vérifier que la date sauvegardée tombe bien un lundi (sinon corriger - bug timezone v2.0)
-        const savedDay = parseLocalDate(state.currentWeekStart).getDay();
-        if (savedDay !== 1) {
-            const corrected = formatDate(getMonday(parseLocalDate(state.currentWeekStart)));
-            console.log('Correction date semaine:', state.currentWeekStart, '→', corrected);
-            state.currentWeekStart = corrected;
+        // Vérifier que la date sauvegardée tombe un lundi
+        const parsed = parseLocalDate(state.currentWeekStart);
+        const day = parsed.getDay(); // 0=dim, 1=lun, ..., 6=sam
+        if (day !== 1) {
+            // Cas typique du bug timezone : dans une timezone UTC+ (ex: Réunion +4),
+            // une date "lundi 00h locale" → toISOString → "dimanche 20h UTC" → stockée comme "dimanche".
+            // Si la date stockée est un dimanche, c'est très probablement le lundi SUIVANT.
+            // Pour les autres jours, on prend le lundi de la même semaine ISO.
+            let correctedMonday;
+            if (day === 0) {
+                // Dimanche → lundi suivant (cas du bug timezone UTC+)
+                correctedMonday = new Date(parsed);
+                correctedMonday.setDate(correctedMonday.getDate() + 1);
+            } else {
+                // Autres cas → lundi précédent dans la même semaine
+                correctedMonday = getMonday(parsed);
+            }
+            const before = state.currentWeekStart;
+            state.currentWeekStart = formatDate(correctedMonday);
+            console.log('[FIX] Date semaine corrigée:', before, '→', state.currentWeekStart);
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
         }
     }
     if (!state.currentMonth) {
