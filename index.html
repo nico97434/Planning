@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planning Station-Service</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">⛽</div>
+                <div>
+                    <div class="logo-title">Station Planning</div>
+                    <div class="logo-sub">Gestion d'équipe</div>
+                </div>
+            </div>
+            <nav class="nav">
+                <button class="nav-btn active" data-view="planning">📅 Planning</button>
+                <button class="nav-btn" data-view="employees">👥 Employés</button>
+                <button class="nav-btn" data-view="leaves">🏖️ Congés</button>
+                <button class="nav-btn" data-view="stats">📊 Statistiques</button>
+                <button class="nav-btn" data-view="settings">⚙️ Paramètres</button>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="btn-export" id="exportBtn">💾 Exporter</button>
+                <button class="btn-import" id="importBtn">📥 Importer</button>
+                <input type="file" id="importFile" accept=".json" style="display:none">
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main">
+            <!-- Vue Planning -->
+            <section class="view" id="view-planning">
+                <header class="header">
+                    <div class="header-left">
+                        <h1>Planning de la semaine</h1>
+                        <div class="week-nav">
+                            <button class="btn-icon" id="prevWeek">‹</button>
+                            <span class="week-label" id="weekLabel"></span>
+                            <button class="btn-icon" id="nextWeek">›</button>
+                            <button class="btn-today" id="todayBtn">Aujourd'hui</button>
+                        </div>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn-secondary" id="copyWeekBtn">📋 Copier la semaine</button>
+                        <button class="btn-secondary" id="clearWeekBtn">🗑️ Vider</button>
+                        <button class="btn-primary" id="autoFillBtn">✨ Auto-remplir</button>
+                    </div>
+                </header>
+
+                <div class="planning-container">
+                    <div class="planning-grid" id="planningGrid"></div>
+                </div>
+
+                <div class="legend">
+                    <div class="legend-item"><span class="legend-color" style="background:#3b82f6"></span> Matin</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#f59e0b"></span> Après-midi</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#8b5cf6"></span> Nuit</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#10b981"></span> Journée</div>
+                    <div class="legend-item"><span class="legend-color absence"></span> Absence</div>
+                    <div class="legend-item"><span class="legend-color leave"></span> Congé</div>
+                </div>
+            </section>
+
+            <!-- Vue Employés -->
+            <section class="view hidden" id="view-employees">
+                <header class="header">
+                    <h1>Gestion des employés</h1>
+                    <button class="btn-primary" id="addEmployeeBtn">+ Ajouter un employé</button>
+                </header>
+                <div class="employees-grid" id="employeesGrid"></div>
+            </section>
+
+            <!-- Vue Congés -->
+            <section class="view hidden" id="view-leaves">
+                <header class="header">
+                    <h1>Demandes de congés</h1>
+                    <button class="btn-primary" id="addLeaveBtn">+ Nouvelle demande</button>
+                </header>
+                <div class="leaves-summary" id="leavesSummary"></div>
+                <div class="leaves-list" id="leavesList"></div>
+            </section>
+
+            <!-- Vue Statistiques -->
+            <section class="view hidden" id="view-stats">
+                <header class="header">
+                    <h1>Statistiques de la semaine</h1>
+                </header>
+                <div class="stats-container" id="statsContainer"></div>
+            </section>
+
+            <!-- Vue Paramètres -->
+            <section class="view hidden" id="view-settings">
+                <header class="header">
+                    <h1>Paramètres</h1>
+                </header>
+                <div class="settings-container">
+                    <div class="settings-card">
+                        <h3>Horaires d'ouverture</h3>
+                        <div class="form-row">
+                            <label>Heure d'ouverture</label>
+                            <input type="time" id="settingOpen" value="06:00">
+                        </div>
+                        <div class="form-row">
+                            <label>Heure de fermeture</label>
+                            <input type="time" id="settingClose" value="22:00">
+                        </div>
+                        <div class="form-row">
+                            <label>Ouverture 24h/24</label>
+                            <input type="checkbox" id="setting24h">
+                        </div>
+                    </div>
+
+                    <div class="settings-card">
+                        <h3>Shifts par défaut</h3>
+                        <div id="shiftsList"></div>
+                        <button class="btn-secondary" id="addShiftBtn">+ Ajouter un shift</button>
+                    </div>
+
+                    <div class="settings-card">
+                        <h3>Règles de planning</h3>
+                        <div class="form-row">
+                            <label>Effectif minimum requis</label>
+                            <input type="number" id="settingMinStaff" value="1" min="1">
+                        </div>
+                        <div class="form-row">
+                            <label>Heures hebdo standard</label>
+                            <input type="number" id="settingStdHours" value="35" min="1">
+                        </div>
+                        <div class="form-row">
+                            <label>Repos minimum entre shifts (h)</label>
+                            <input type="number" id="settingRest" value="11" min="0">
+                        </div>
+                    </div>
+
+                    <div class="settings-card danger">
+                        <h3>Zone dangereuse</h3>
+                        <button class="btn-danger" id="resetDataBtn">🗑️ Réinitialiser toutes les données</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal Shift -->
+    <div class="modal-overlay hidden" id="shiftModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="shiftModalTitle">Affecter un shift</h2>
+                <button class="modal-close" data-close-modal="shiftModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Employé</label>
+                    <div class="employee-info" id="shiftEmployeeInfo"></div>
+                </div>
+                <div class="form-row">
+                    <label>Date</label>
+                    <div class="date-info" id="shiftDateInfo"></div>
+                </div>
+                <div class="form-row">
+                    <label>Type de shift</label>
+                    <select id="shiftType">
+                        <option value="">-- Sélectionner --</option>
+                    </select>
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Début</label>
+                        <input type="time" id="shiftStart">
+                    </div>
+                    <div>
+                        <label>Fin</label>
+                        <input type="time" id="shiftEnd">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Pause (minutes)</label>
+                    <input type="number" id="shiftBreak" value="0" min="0">
+                </div>
+                <div class="form-row">
+                    <label>Note (optionnel)</label>
+                    <textarea id="shiftNote" placeholder="Information complémentaire, remplaçant, etc."></textarea>
+                </div>
+                <div class="alert hidden" id="shiftAlert"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger" id="deleteShiftBtn">Supprimer</button>
+                <div class="modal-footer-right">
+                    <button class="btn-secondary" data-close-modal="shiftModal">Annuler</button>
+                    <button class="btn-primary" id="saveShiftBtn">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Employé -->
+    <div class="modal-overlay hidden" id="employeeModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="employeeModalTitle">Nouvel employé</h2>
+                <button class="modal-close" data-close-modal="employeeModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Nom complet</label>
+                    <input type="text" id="empName" placeholder="Jean Dupont">
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Poste</label>
+                        <select id="empRole">
+                            <option value="Caissier">Caissier</option>
+                            <option value="Pompiste">Pompiste</option>
+                            <option value="Manager">Manager</option>
+                            <option value="Polyvalent">Polyvalent</option>
+                            <option value="Apprenti">Apprenti</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Couleur</label>
+                        <input type="color" id="empColor" value="#3b82f6">
+                    </div>
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Heures contractuelles / semaine</label>
+                        <input type="number" id="empHours" value="35" min="0">
+                    </div>
+                    <div>
+                        <label>Congés annuels (jours)</label>
+                        <input type="number" id="empLeaves" value="25" min="0">
+                    </div>
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Téléphone</label>
+                        <input type="tel" id="empPhone" placeholder="06 12 34 56 78">
+                    </div>
+                    <div>
+                        <label>Email</label>
+                        <input type="email" id="empEmail" placeholder="email@exemple.fr">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Disponibilités (jours travaillables)</label>
+                    <div class="days-picker" id="empDays">
+                        <label><input type="checkbox" value="0"> Lun</label>
+                        <label><input type="checkbox" value="1"> Mar</label>
+                        <label><input type="checkbox" value="2"> Mer</label>
+                        <label><input type="checkbox" value="3"> Jeu</label>
+                        <label><input type="checkbox" value="4"> Ven</label>
+                        <label><input type="checkbox" value="5"> Sam</label>
+                        <label><input type="checkbox" value="6"> Dim</label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger hidden" id="deleteEmployeeBtn">Supprimer</button>
+                <div class="modal-footer-right">
+                    <button class="btn-secondary" data-close-modal="employeeModal">Annuler</button>
+                    <button class="btn-primary" id="saveEmployeeBtn">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Congé -->
+    <div class="modal-overlay hidden" id="leaveModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="leaveModalTitle">Demande de congé</h2>
+                <button class="modal-close" data-close-modal="leaveModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Employé</label>
+                    <select id="leaveEmployee"></select>
+                </div>
+                <div class="form-row">
+                    <label>Type</label>
+                    <select id="leaveType">
+                        <option value="conges">Congés payés</option>
+                        <option value="rtt">RTT</option>
+                        <option value="maladie">Arrêt maladie</option>
+                        <option value="absence">Absence</option>
+                        <option value="formation">Formation</option>
+                        <option value="sansolde">Sans solde</option>
+                    </select>
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Du</label>
+                        <input type="date" id="leaveStart">
+                    </div>
+                    <div>
+                        <label>Au</label>
+                        <input type="date" id="leaveEnd">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Statut</label>
+                    <select id="leaveStatus">
+                        <option value="en_attente">En attente</option>
+                        <option value="approuve">Approuvé</option>
+                        <option value="refuse">Refusé</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Motif / Note</label>
+                    <textarea id="leaveNote" placeholder="Raison de la demande"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger hidden" id="deleteLeaveBtn">Supprimer</button>
+                <div class="modal-footer-right">
+                    <button class="btn-secondary" data-close-modal="leaveModal">Annuler</button>
+                    <button class="btn-primary" id="saveLeaveBtn">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Shift Settings -->
+    <div class="modal-overlay hidden" id="shiftSettingModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Configurer un shift</h2>
+                <button class="modal-close" data-close-modal="shiftSettingModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Nom du shift</label>
+                    <input type="text" id="shiftSetName" placeholder="Matin">
+                </div>
+                <div class="form-row dual">
+                    <div>
+                        <label>Début</label>
+                        <input type="time" id="shiftSetStart">
+                    </div>
+                    <div>
+                        <label>Fin</label>
+                        <input type="time" id="shiftSetEnd">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Couleur</label>
+                    <input type="color" id="shiftSetColor" value="#3b82f6">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger hidden" id="deleteShiftSettingBtn">Supprimer</button>
+                <div class="modal-footer-right">
+                    <button class="btn-secondary" data-close-modal="shiftSettingModal">Annuler</button>
+                    <button class="btn-primary" id="saveShiftSettingBtn">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>

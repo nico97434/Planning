@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Backups locaux
+*.backup
+*.bak
+backup-*.json
+
+# Node (au cas où)
+node_modules/
+package-lock.json
