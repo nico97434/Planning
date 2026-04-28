@@ -301,8 +301,13 @@ function getMonday(d = new Date()) {
 }
 
 function formatDate(d) {
+    // Utilise les composants locaux pour éviter les décalages de timezone
+    // (toISOString() convertit en UTC ce qui cause un décalage de jour selon le fuseau)
     const dd = new Date(d);
-    return dd.toISOString().slice(0, 10);
+    const y = dd.getFullYear();
+    const m = String(dd.getMonth() + 1).padStart(2, '0');
+    const day = String(dd.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
 }
 
 function formatDateFR(d, opts = {}) {
@@ -342,9 +347,15 @@ function initials(name) {
     return name.split(' ').filter(Boolean).slice(0, 2).map(s => s[0]?.toUpperCase() || '').join('') || '?';
 }
 
+function parseLocalDate(dateStr) {
+    // Parse 'YYYY-MM-DD' comme une date locale (pas UTC) pour éviter les décalages
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+}
+
 function dayIndexFromDate(dateStr) {
     // 0=lundi ... 6=dimanche
-    return (new Date(dateStr).getDay() + 6) % 7;
+    return (parseLocalDate(dateStr).getDay() + 6) % 7;
 }
 
 function isWeekend(dateStr) {
@@ -395,6 +406,14 @@ function toast(message, type = 'info', duration = 3000) {
 function init() {
     if (!state.currentWeekStart) {
         state.currentWeekStart = formatDate(getMonday());
+    } else {
+        // Vérifier que la date sauvegardée tombe bien un lundi (sinon corriger - bug timezone v2.0)
+        const savedDay = parseLocalDate(state.currentWeekStart).getDay();
+        if (savedDay !== 1) {
+            const corrected = formatDate(getMonday(parseLocalDate(state.currentWeekStart)));
+            console.log('Correction date semaine:', state.currentWeekStart, '→', corrected);
+            state.currentWeekStart = corrected;
+        }
     }
     if (!state.currentMonth) {
         const t = new Date();
@@ -542,7 +561,7 @@ function setupPlanningEvents() {
 }
 
 function navigateWeek(days) {
-    const d = new Date(state.currentWeekStart);
+    const d = parseLocalDate(state.currentWeekStart);
     d.setDate(d.getDate() + days);
     state.currentWeekStart = formatDate(d);
     saveState();
@@ -550,7 +569,7 @@ function navigateWeek(days) {
 }
 
 function getWeekDates() {
-    const start = new Date(state.currentWeekStart);
+    const start = parseLocalDate(state.currentWeekStart);
     return Array.from({ length: 7 }, (_, i) => addDays(start, i));
 }
 
@@ -1368,7 +1387,7 @@ function renderMonth() {
     grid.querySelectorAll('.month-cell:not(.outside)').forEach(cell => {
         cell.addEventListener('click', () => {
             // Aller à la semaine de la date cliquée
-            const d = new Date(cell.dataset.date);
+            const d = parseLocalDate(cell.dataset.date);
             state.currentWeekStart = formatDate(getMonday(d));
             saveState();
             switchView('planning');
@@ -1670,7 +1689,7 @@ function openShiftModal(empId, dateStr) {
 
     const role = s.roles.find(r => r.id === emp.role);
     document.getElementById('shiftEmployeeInfo').innerHTML = `<span style="color:${emp.color}">●</span> ${escapeHtml(emp.name)} ${role ? '(' + role.icon + ' ' + role.name + ')' : ''}`;
-    document.getElementById('shiftDateInfo').textContent = new Date(dateStr).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    document.getElementById('shiftDateInfo').textContent = parseLocalDate(dateStr).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
     // Shift types select - n'affiche que les shifts actifs ce jour-là
     const shiftSel = document.getElementById('shiftType');
