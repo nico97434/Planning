@@ -518,20 +518,24 @@ function renderAll() {
 function updateBadges() {
     const pending = S().leaves.filter(l => l.status === 'en_attente').length;
     const badge1 = document.getElementById('badgeLeaves');
-    if (pending > 0) {
-        badge1.textContent = pending;
-        badge1.classList.remove('hidden');
-    } else {
-        badge1.classList.add('hidden');
+    if (badge1) {
+        if (pending > 0) {
+            badge1.textContent = pending;
+            badge1.classList.remove('hidden');
+        } else {
+            badge1.classList.add('hidden');
+        }
     }
 
     const alerts = computeAlerts();
     const badge2 = document.getElementById('badgeAlerts');
-    if (alerts.length > 0) {
-        badge2.textContent = alerts.length;
-        badge2.classList.remove('hidden');
-    } else {
-        badge2.classList.add('hidden');
+    if (badge2) {
+        if (alerts.length > 0) {
+            badge2.textContent = alerts.length;
+            badge2.classList.remove('hidden');
+        } else {
+            badge2.classList.add('hidden');
+        }
     }
 }
 
@@ -915,89 +919,261 @@ function clearWeek() {
 }
 
 // ============== AUTO-FILL ==============
+// ============== HISTORIQUE & STATISTIQUES POUR AUTO-FILL INTELLIGENT ==============
+// Analyse les N dernières semaines pour calculer compteurs d'équité
+function computeEmployeeHistory(empId, refDate, weeksBack = 4) {
+    const s = S();
+    const stats = {
+        totalHoursWorked: 0,        // somme des heures réelles travaillées
+        totalHoursContract: 0,       // somme des heures contractuelles attendues
+        balance: 0,                  // diff = travaillé - contractuel (+ = a fait des heures supp)
+        weekendOffCount: 0,          // nb de weekends complets (sam+dim) OFF
+        weekendsTotal: 0,
+        earlyShiftCount: 0,          // nb de shifts qui commencent ≤ 6h
+        nightShiftCount: 0,          // nb de shifts qui finissent ≥ 21h
+        shiftCounts: {},             // nb de fois où l'employé a eu chaque type de shift
+        startTimeHistory: [],        // liste des heures de début sur la période
+        consecutiveDays: 0,          // jours consécutifs récemment travaillés (avant refDate)
+        lastDayOff: null             // dernier jour OFF (depuis refDate en arrière)
+    };
+    const emp = s.employees.find(e => e.id === empId);
+    if (!emp) return stats;
+
+    const refMonday = getMonday(parseLocalDate(refDate));
+    // Parcours des semaines précédentes
+    for (let w = 1; w <= weeksBack; w++) {
+        const weekStart = addDays(refMonday, -7 * w);
+        let weekHours = 0;
+        let weekendOff = true; // suppose que oui jusqu'à preuve du contraire
+        for (let i = 0; i < 7; i++) {
+            const d = addDays(weekStart, i);
+            const dStr = formatDate(d);
+            const sh = s.shifts[empId + '_' + dStr];
+            if (sh && sh.type !== 'absence' && sh.start && sh.end) {
+                const dur = shiftDuration(sh.start, sh.end, sh.breakMin || 0);
+                weekHours += dur;
+                stats.shiftCounts[sh.type] = (stats.shiftCounts[sh.type] || 0) + 1;
+                stats.startTimeHistory.push(timeToMin(sh.start));
+                if (timeToMin(sh.start) <= 6 * 60) stats.earlyShiftCount++;
+                if (timeToMin(sh.end) >= 21 * 60) stats.nightShiftCount++;
+                // Si shift sam ou dim → weekend pas off
+                if (i >= 5) weekendOff = false;
+            }
+        }
+        stats.totalHoursWorked += weekHours;
+        stats.totalHoursContract += emp.hoursPerWeek;
+        stats.weekendsTotal++;
+        if (weekendOff) stats.weekendOffCount++;
+    }
+
+    stats.balance = stats.totalHoursWorked - stats.totalHoursContract;
+
+    // Compter jours consécutifs travaillés juste avant refDate
+    let consecutive = 0;
+    for (let i = 1; i <= 14; i++) {
+        const d = formatDate(addDays(parseLocalDate(refDate), -i));
+        const sh = s.shifts[empId + '_' + d];
+        if (sh && sh.type !== 'absence') {
+            consecutive++;
+            if (!stats.lastDayOff) stats.lastDayOff = null; // toujours pas trouvé
+        } else if (!isOnLeave(empId, d)) {
+            if (!stats.lastDayOff) stats.lastDayOff = d;
+            break;
+        } else {
+            break; // congé compte comme jour off
+        }
+    }
+    stats.consecutiveDays = consecutive;
+    return stats;
+}
+
 function autoFillWeek() {
-    if (!confirm("Remplir automatiquement la semaine en respectant minimums, préférences et disponibilités ?")) return;
+    if (!confirm("Remplir automatiquement la semaine en équilibrant les heures, les jours OFF et les shifts matinaux selon l'historique ?")) return;
     const weekDates = getWeekDates();
     const s = S();
     let assignments = 0;
 
-    // Initialiser le tracking d'heures par employé
-    const empHours = {};
-    s.employees.forEach(e => empHours[e.id] = computeWeekHours(e.id, weekDates));
+    // Pré-calcul : historique de chaque employé sur les 4 semaines précédant cette semaine
+    const refDate = formatDate(weekDates[0]);
+    const empHistory = {};
+    s.employees.forEach(e => {
+        empHistory[e.id] = computeEmployeeHistory(e.id, refDate, 4);
+    });
 
-    // Pour chaque jour
+    // Tracking des heures déjà affectées CETTE semaine (au cas où des shifts existent déjà)
+    const empHoursThisWeek = {};
+    const empDaysThisWeek = {};      // nb de jours travaillés cette semaine (pour limiter à 5/6)
+    const empWeekendDays = {};       // jours weekend déjà travaillés cette semaine
+    const empEarlyThisWeek = {};     // shifts ≤6h déjà fait cette semaine
+    const empConsecutiveDays = {};   // tracking jours consécutifs au sein de la semaine
+
+    s.employees.forEach(e => {
+        empHoursThisWeek[e.id] = 0;
+        empDaysThisWeek[e.id] = 0;
+        empWeekendDays[e.id] = 0;
+        empEarlyThisWeek[e.id] = 0;
+        empConsecutiveDays[e.id] = empHistory[e.id].consecutiveDays;
+    });
+    weekDates.forEach((d, i) => {
+        const dStr = formatDate(d);
+        s.employees.forEach(e => {
+            const sh = s.shifts[e.id + '_' + dStr];
+            if (sh && sh.type !== 'absence' && sh.start && sh.end) {
+                const dur = shiftDuration(sh.start, sh.end, sh.breakMin || 0);
+                empHoursThisWeek[e.id] += dur;
+                empDaysThisWeek[e.id]++;
+                if (i >= 5) empWeekendDays[e.id]++;
+                if (timeToMin(sh.start) <= 6 * 60) empEarlyThisWeek[e.id]++;
+            }
+        });
+    });
+
+    // Génération d'une variation d'horaire (pour éviter que tout le monde fasse 5h00 pile chaque jour)
+    // On garde le shift type mais on peut décaler de 0/30/60 min en avant si pas de contrainte
+    function variedSchedule(sched, employee, shiftId) {
+        // Pour le shift "matin" : varier les démarrages (5h, 5h30, 6h, 7h…)
+        // Mais respecter la base si l'employé a une pref "must"
+        const pref = getShiftPref(employee, shiftId);
+        if (pref === 'must') return { start: sched.start, end: sched.end };
+        // Variation aléatoire douce : ±30 min sur le start, conserver durée
+        const baseStart = timeToMin(sched.start);
+        const baseEnd = timeToMin(sched.end);
+        const dur = baseEnd > baseStart ? baseEnd - baseStart : (baseEnd + 24*60 - baseStart);
+        // Décalage entre -30 et +120 min selon profil
+        const variations = [0, 30, 60, 90];
+        const idx = Math.floor(Math.random() * variations.length);
+        const newStart = baseStart + variations[idx];
+        const newEnd = newStart + dur;
+        const fmt = (m) => `${String(Math.floor(m/60) % 24).padStart(2,'0')}:${String(m % 60).padStart(2,'0')}`;
+        return { start: fmt(newStart), end: fmt(newEnd) };
+    }
+
+    // Pour chaque jour de la semaine
     weekDates.forEach((d, dayIdx) => {
         const dateStr = formatDate(d);
         const dayType = getDayType(dateStr);
         const reqs = s.requirements[dayType] || {};
+        const isWeekendDay = dayIdx >= 5;
 
-        // Pour chaque combinaison rôle/shift requise
         for (const reqKey in reqs) {
             const need = reqs[reqKey];
             if (need <= 0) continue;
-            const [roleId, shiftId] = reqKey.split('_').reduce((acc, part, i, arr) => {
-                // roleId commence par 'r_', shiftId par 's_'
-                if (part === 'r' || part === 's') return acc;
-                if (acc.length === 0) return [arr.slice(0, 2).join('_')];
-                return [acc[0], arr.slice(2).join('_')];
-            }, []);
-            // Plus simple : split sur le premier '_s_'
             const parts = reqKey.split('_s_');
             const roleIdClean = parts[0];
             const shiftIdClean = 's_' + parts[1];
 
             const shiftType = s.shiftTypes.find(st => st.id === shiftIdClean);
             if (!shiftType) continue;
-            // Récupère l'horaire pour ce type de jour ; si désactivé, skip
             const sched = getShiftSchedule(shiftType, dateStr);
             if (!sched) continue;
 
-            // Compter les déjà affectés sur ce shift+rôle ce jour
-            let assigned = 0;
+            // Combien déjà affectés ce jour pour ce shift+rôle ?
+            let alreadyAssigned = 0;
             s.employees.forEach(e => {
                 const sh = s.shifts[e.id + '_' + dateStr];
-                if (sh && sh.type === shiftIdClean && sh.role === roleIdClean) assigned++;
+                if (sh && sh.type === shiftIdClean && sh.role === roleIdClean) alreadyAssigned++;
             });
-            const missing = need - assigned;
+            const missing = need - alreadyAssigned;
             if (missing <= 0) continue;
 
-            // Trouver candidats qui peuvent ce rôle, qui sont dispo, sous quota
+            const isEarlyShift = timeToMin(sched.start) <= 6 * 60;
+
+            // SCORING INTELLIGENT
             const candidates = s.employees
                 .filter(e => {
-                    // Doit avoir le rôle ou rôle secondaire
                     if (e.role !== roleIdClean && !(e.secondaryRoles || []).includes(roleIdClean)) return false;
-                    // Disponible
                     if (getEmployeeAvailability(e, dateStr) !== 'available') return false;
-                    // Pas déjà affecté ce jour
-                    if (s.shifts[e.id + '_' + dateStr]) return false;
-                    // Pas trop d'heures
-                    const dur = shiftDuration(sched.start, sched.end);
-                    if (empHours[e.id] + dur > e.hoursPerWeek + 4) return false;
-                    // Pas en pref impossible
+                    if (s.shifts[e.id + '_' + dateStr]) return false; // déjà un shift ce jour
                     if (getShiftPref(e, shiftIdClean) === 'impossible') return false;
+                    // Limite max 6 jours consécutifs
+                    if (empConsecutiveDays[e.id] >= 6) return false;
+                    // Limite max 6 jours travaillés/semaine
+                    if (empDaysThisWeek[e.id] >= 6) return false;
+                    // Limite heures (target +4h max)
+                    const dur = shiftDuration(sched.start, sched.end);
+                    if (empHoursThisWeek[e.id] + dur > e.hoursPerWeek + 4) return false;
                     return true;
                 })
                 .map(e => {
-                    // Score: priorité aux must / prefer
+                    const hist = empHistory[e.id];
+                    let score = 0;
+
+                    // 1) PRÉFÉRENCES (poids fort)
                     const pref = getShiftPref(e, shiftIdClean);
-                    const prefScore = pref === 'must' ? 100 : pref === 'prefer' ? 30 : pref === 'avoid' ? -40 : 0;
-                    const hoursScore = -((empHours[e.id] / e.hoursPerWeek) * 10); // les moins chargés en premier
-                    const roleScore = e.role === roleIdClean ? 5 : 0; // poste principal préféré
-                    return { emp: e, score: prefScore + hoursScore + roleScore };
+                    if (pref === 'must') score += 200;
+                    else if (pref === 'prefer') score += 50;
+                    else if (pref === 'avoid') score -= 60;
+
+                    // 2) ÉQUILIBRE D'HEURES sur historique récent
+                    // Si l'employé a un solde positif (a fait beaucoup d'heures les dernières semaines),
+                    // pénaliser pour le faire moins travailler cette semaine
+                    score -= hist.balance * 3;
+                    // Et si déjà beaucoup d'heures cette semaine, baisser
+                    const ratioThisWeek = empHoursThisWeek[e.id] / e.hoursPerWeek;
+                    score -= ratioThisWeek * 30;
+
+                    // 3) ROLE PRINCIPAL préféré
+                    if (e.role === roleIdClean) score += 8;
+
+                    // 4) SHIFTS MATINAUX → faire tourner
+                    // Si shift matinal et l'employé en a déjà fait beaucoup récemment, pénaliser
+                    if (isEarlyShift) {
+                        score -= hist.earlyShiftCount * 4;
+                        score -= empEarlyThisWeek[e.id] * 8;
+                    }
+
+                    // 5) WEEKEND → privilégier ceux qui ont peu eu de weekends OFF récemment
+                    if (isWeekendDay) {
+                        // Plus l'employé a eu de weekends off, moins il est prioritaire pour bosser ce weekend
+                        // (= il a "déjà eu sa pause", c'est au tour des autres d'être off)
+                        // Inversement, ceux avec peu de weekends off = il faut les faire bosser moins le weekend
+                        // Logique : on cherche à équilibrer → priorité à ceux qui ont eu PEU de weekends off (donc score positif)
+                        // → ils ont déjà bossé les weekends, donc on continue. Non, on veut l'inverse !
+                        // Inversion : ceux qui ont eu BEAUCOUP de weekends off → c'est leur tour de bosser
+                        score += hist.weekendOffCount * 6;
+                        // Pénaliser ceux déjà à 2 jours weekend cette semaine
+                        score -= empWeekendDays[e.id] * 30;
+                    }
+
+                    // 6) RÉPARTITION DES TYPES DE SHIFT
+                    // Si l'employé a TRÈS peu fait ce type de shift récemment, c'est peut-être son tour
+                    // Si BEAUCOUP, peut-être faire varier
+                    const shiftCount = hist.shiftCounts[shiftIdClean] || 0;
+                    const totalShifts = Object.values(hist.shiftCounts).reduce((a,b) => a+b, 0) || 1;
+                    const proportion = shiftCount / totalShifts;
+                    // Si pref neutral et proportion > 0.7, l'employé fait toujours ce shift → on dose
+                    if (pref === 'neutral' && proportion > 0.7) score -= 15;
+
+                    // 7) JOURS CONSÉCUTIFS — privilégier ceux qui se sont reposés
+                    if (empConsecutiveDays[e.id] >= 5) score -= 50;
+                    else if (empConsecutiveDays[e.id] >= 4) score -= 20;
+
+                    // 8) BRUIT ALÉATOIRE pour casser les ex-aequos et varier d'une exécution à l'autre
+                    score += (Math.random() - 0.5) * 8;
+
+                    return { emp: e, score };
                 })
                 .sort((a, b) => b.score - a.score);
 
+            // Affecter les meilleurs candidats
             for (let n = 0; n < missing && n < candidates.length; n++) {
                 const e = candidates[n].emp;
+                // Variation des horaires (sauf si pref must)
+                const finalSched = variedSchedule(sched, e, shiftIdClean);
+                const dur = shiftDuration(finalSched.start, finalSched.end);
                 s.shifts[e.id + '_' + dateStr] = {
                     type: shiftIdClean,
                     role: roleIdClean,
-                    start: sched.start,
-                    end: sched.end,
-                    breakMin: shiftDuration(sched.start, sched.end) >= 6 ? s.settings.mealBreak : 0,
+                    start: finalSched.start,
+                    end: finalSched.end,
+                    breakMin: dur >= 6 ? s.settings.mealBreak : 0,
                     note: ''
                 };
-                empHours[e.id] += shiftDuration(sched.start, sched.end);
+                empHoursThisWeek[e.id] += dur;
+                empDaysThisWeek[e.id]++;
+                if (isWeekendDay) empWeekendDays[e.id]++;
+                if (timeToMin(finalSched.start) <= 6 * 60) empEarlyThisWeek[e.id]++;
+                empConsecutiveDays[e.id]++;
                 assignments++;
             }
         }
@@ -1073,6 +1249,7 @@ function setupCoverageEvents() {
 
 function renderCoverage() {
     const grid = document.getElementById('coverageGrid');
+    if (!grid) return;
     const weekDates = getWeekDates();
     const s = S();
 
@@ -1308,6 +1485,7 @@ function computeAlerts() {
 
 function renderAlerts() {
     const c = document.getElementById('alertsContainer');
+    if (!c) return;
     const alerts = computeAlerts();
 
     if (alerts.length === 0) {
@@ -1359,6 +1537,7 @@ function navigateMonth(delta) {
 
 function renderMonth() {
     const grid = document.getElementById('monthGrid');
+    if (!grid) return;
     const [y, m] = state.currentMonth.split('-').map(Number);
     const firstDay = new Date(y, m - 1, 1);
     const lastDay = new Date(y, m, 0);
@@ -1461,6 +1640,7 @@ function setupEmployeeEvents() {
 
 function renderEmployees() {
     const grid = document.getElementById('employeesGrid');
+    if (!grid) return;
     const s = S();
     if (s.employees.length === 0) {
         grid.innerHTML = '<div class="empty-state">Aucun employé. Cliquez sur "Ajouter un employé".</div>';
@@ -1904,8 +2084,9 @@ function setupLeaveEvents() {
 }
 
 function renderLeaves() {
-    const s = S();
     const summary = document.getElementById('leavesSummary');
+    if (!summary) return;
+    const s = S();
     const enAttente = s.leaves.filter(l => l.status === 'en_attente').length;
     const approuves = s.leaves.filter(l => l.status === 'approuve').length;
     const refuses = s.leaves.filter(l => l.status === 'refuse').length;
@@ -2513,8 +2694,9 @@ function setupTemplateEvents() {
 }
 
 function renderTemplates() {
-    const s = S();
     const grid = document.getElementById('templatesGrid');
+    if (!grid) return;
+    const s = S();
     if (s.templates.length === 0) {
         grid.innerHTML = '<div class="empty-state">Aucun template sauvegardé.<br><br>Construis une semaine type, puis clique sur "Sauver semaine actuelle".</div>';
         return;
