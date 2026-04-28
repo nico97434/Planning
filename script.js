@@ -2,9 +2,144 @@
    PLANNING STATION-SERVICE v2 — Pro
    Multi-stations · Effectifs minimums · Préférences
    Horaires par station · Templates · Vue mensuelle · Alertes
+   Synchronisation cloud Firebase
    ============================================================ */
 
 const STORAGE_KEY = 'planning_station_v2';
+const FIREBASE_CONFIG_KEY = 'planning_station_firebase_config';
+
+// ============== FIREBASE SYNC LAYER ==============
+const Cloud = {
+    app: null,
+    db: null,
+    config: null,
+    connected: false,
+    syncing: false,        // Indique qu'une opération de sync est en cours pour éviter loop
+    skipNextRemote: false, // Indique d'ignorer la prochaine notif remote (= notre propre push)
+    unsubscribe: null,
+
+    init() {
+        // Charger la config sauvegardée
+        try {
+            const saved = localStorage.getItem(FIREBASE_CONFIG_KEY);
+            if (!saved) return;
+            this.config = JSON.parse(saved);
+            this.connect();
+        } catch (e) {
+            console.warn('Cloud init failed', e);
+        }
+    },
+
+    setStatus(status, label) {
+        const el = document.getElementById('syncStatus');
+        if (!el) return;
+        el.classList.remove('sync-local', 'sync-connecting', 'sync-connected', 'sync-error');
+        el.classList.add('sync-' + status);
+        el.querySelector('.sync-label').textContent = label;
+    },
+
+    async connect() {
+        if (!this.config || !window.__firebase) {
+            this.setStatus('local', 'Local');
+            return false;
+        }
+        try {
+            this.setStatus('connecting', 'Connexion...');
+            const { initializeApp, getDatabase, ref, onValue } = window.__firebase;
+            this.app = initializeApp({
+                apiKey: this.config.apiKey,
+                authDomain: this.config.authDomain,
+                databaseURL: this.config.databaseURL,
+                projectId: this.config.projectId
+            });
+            this.db = getDatabase(this.app);
+
+            // S'abonner aux modifs
+            const dataRef = ref(this.db, 'planning_data');
+            this.unsubscribe = onValue(dataRef, (snap) => {
+                const data = snap.val();
+                if (this.skipNextRemote) {
+                    this.skipNextRemote = false;
+                    return;
+                }
+                if (data && !this.syncing) {
+                    // Données reçues du cloud → mettre à jour l'état local
+                    this.applyRemoteData(data);
+                }
+            }, (err) => {
+                console.error('Firebase error', err);
+                this.setStatus('error', 'Erreur sync');
+                toast('Erreur de synchronisation: ' + err.message, 'error', 5000);
+            });
+
+            this.connected = true;
+            this.setStatus('connected', 'Cloud ✓');
+            return true;
+        } catch (e) {
+            console.error('Firebase connect failed', e);
+            this.setStatus('error', 'Erreur');
+            toast('Connexion Firebase échouée: ' + e.message, 'error', 5000);
+            return false;
+        }
+    },
+
+    async push() {
+        // Pousser l'état local vers Firebase
+        if (!this.connected || !this.db) return;
+        try {
+            this.syncing = true;
+            this.skipNextRemote = true;
+            const { ref, set } = window.__firebase;
+            await set(ref(this.db, 'planning_data'), state);
+        } catch (e) {
+            console.error('Push failed', e);
+            toast('Erreur d\'envoi cloud: ' + e.message, 'error');
+        } finally {
+            this.syncing = false;
+        }
+    },
+
+    async pull() {
+        // Tirer l'état depuis Firebase et l'appliquer
+        if (!this.connected || !this.db) return null;
+        try {
+            const { ref, get } = window.__firebase;
+            const snap = await get(ref(this.db, 'planning_data'));
+            return snap.val();
+        } catch (e) {
+            console.error('Pull failed', e);
+            return null;
+        }
+    },
+
+    applyRemoteData(data) {
+        // Appliquer les données reçues du cloud sans déclencher de re-push
+        if (!data) return;
+        state = data;
+        // Sauver localement aussi pour cache offline
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+        // Re-render tout
+        if (typeof renderAll === 'function') {
+            renderAll();
+            toast('🔄 Mise à jour reçue du cloud', 'info', 2000);
+        }
+    },
+
+    disconnect() {
+        if (this.unsubscribe) { this.unsubscribe(); this.unsubscribe = null; }
+        this.connected = false;
+        this.config = null;
+        this.app = null;
+        this.db = null;
+        localStorage.removeItem(FIREBASE_CONFIG_KEY);
+        this.setStatus('local', 'Local');
+    },
+
+    saveConfig(config) {
+        this.config = config;
+        localStorage.setItem(FIREBASE_CONFIG_KEY, JSON.stringify(config));
+    }
+};
 
 // ============== ÉTAT PAR DÉFAUT ==============
 function defaultStationData(name = 'Ma station') {
@@ -25,9 +160,27 @@ function defaultStationData(name = 'Ma station') {
         shifts: {}, // 'employeeId_YYYY-MM-DD' -> { type, role, start, end, breakMin, note }
         leaves: [],
         shiftTypes: [
-            { id: 's_morning', name: 'Matin', start: '06:00', end: '14:00', color: '#3b82f6' },
-            { id: 's_afternoon', name: 'Après-midi', start: '14:00', end: '22:00', color: '#f59e0b' },
-            { id: 's_night', name: 'Nuit', start: '22:00', end: '06:00', color: '#8b5cf6' }
+            { id: 's_morning', name: 'Matin', color: '#3b82f6',
+              schedules: {
+                weekday: { enabled: true, start: '06:00', end: '14:00' },
+                weekend: { enabled: true, start: '07:00', end: '15:00' },
+                holiday: { enabled: true, start: '07:00', end: '15:00' }
+              }
+            },
+            { id: 's_afternoon', name: 'Après-midi', color: '#f59e0b',
+              schedules: {
+                weekday: { enabled: true, start: '14:00', end: '22:00' },
+                weekend: { enabled: true, start: '15:00', end: '22:00' },
+                holiday: { enabled: true, start: '15:00', end: '22:00' }
+              }
+            },
+            { id: 's_night', name: 'Nuit', color: '#8b5cf6',
+              schedules: {
+                weekday: { enabled: true, start: '22:00', end: '06:00' },
+                weekend: { enabled: true, start: '22:00', end: '07:00' },
+                holiday: { enabled: true, start: '22:00', end: '07:00' }
+              }
+            }
         ],
         roles: [
             { id: 'r_pompiste', name: 'Pompiste', color: '#3b82f6', icon: '⛽' },
@@ -101,6 +254,20 @@ function loadState() {
             }
             if (!s.settings) s.settings = def.settings;
             else s.settings = Object.assign({}, def.settings, s.settings);
+            // Migration shiftTypes ancien format (start/end direct) -> nouveau (schedules par jour)
+            if (s.shiftTypes) {
+                s.shiftTypes.forEach(st => {
+                    if (!st.schedules && st.start && st.end) {
+                        st.schedules = {
+                            weekday: { enabled: true, start: st.start, end: st.end },
+                            weekend: { enabled: true, start: st.start, end: st.end },
+                            holiday: { enabled: true, start: st.start, end: st.end }
+                        };
+                        delete st.start;
+                        delete st.end;
+                    }
+                });
+            }
         });
         return merged;
     } catch (e) {
@@ -113,7 +280,11 @@ function saveState() {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (e) {
-        toast('Erreur de sauvegarde: ' + e.message, 'error');
+        toast('Erreur de sauvegarde locale: ' + e.message, 'error');
+    }
+    // Pousser vers le cloud si connecté
+    if (Cloud.connected && !Cloud.syncing) {
+        Cloud.push();
     }
 }
 
@@ -191,6 +362,23 @@ function getDayType(dateStr) {
     return 'weekday';
 }
 
+// Renvoie l'horaire d'un shift type pour un jour donné, ou null si désactivé ce jour
+function getShiftSchedule(shiftType, dateStr) {
+    if (!shiftType || !shiftType.schedules) return null;
+    const dayType = getDayType(dateStr);
+    const sch = shiftType.schedules[dayType];
+    if (!sch || !sch.enabled) return null;
+    return { start: sch.start, end: sch.end };
+}
+
+// Pour l'affichage : renvoie une chaîne "06:00-14:00" la plus représentative (semaine en priorité)
+function getShiftDisplayTime(shiftType) {
+    if (!shiftType || !shiftType.schedules) return '';
+    const sch = shiftType.schedules.weekday || shiftType.schedules.weekend || shiftType.schedules.holiday;
+    if (sch && sch.enabled) return `${sch.start}-${sch.end}`;
+    return '';
+}
+
 function toast(message, type = 'info', duration = 3000) {
     const c = document.getElementById('toastContainer');
     const el = document.createElement('div');
@@ -229,7 +417,11 @@ function init() {
     setupTemplateEvents();
     setupModalEvents();
     setupExportImport();
+    setupCloudEvents();
     renderAll();
+
+    // Init du cloud après tout le reste (pour que les renderAll fonctionnent quand le cloud notifie)
+    Cloud.init();
 }
 
 function seedDemoData() {
@@ -690,6 +882,9 @@ function autoFillWeek() {
 
             const shiftType = s.shiftTypes.find(st => st.id === shiftIdClean);
             if (!shiftType) continue;
+            // Récupère l'horaire pour ce type de jour ; si désactivé, skip
+            const sched = getShiftSchedule(shiftType, dateStr);
+            if (!sched) continue;
 
             // Compter les déjà affectés sur ce shift+rôle ce jour
             let assigned = 0;
@@ -710,7 +905,7 @@ function autoFillWeek() {
                     // Pas déjà affecté ce jour
                     if (s.shifts[e.id + '_' + dateStr]) return false;
                     // Pas trop d'heures
-                    const dur = shiftDuration(shiftType.start, shiftType.end);
+                    const dur = shiftDuration(sched.start, sched.end);
                     if (empHours[e.id] + dur > e.hoursPerWeek + 4) return false;
                     // Pas en pref impossible
                     if (getShiftPref(e, shiftIdClean) === 'impossible') return false;
@@ -731,12 +926,12 @@ function autoFillWeek() {
                 s.shifts[e.id + '_' + dateStr] = {
                     type: shiftIdClean,
                     role: roleIdClean,
-                    start: shiftType.start,
-                    end: shiftType.end,
-                    breakMin: shiftDuration(shiftType.start, shiftType.end) >= 6 ? s.settings.mealBreak : 0,
+                    start: sched.start,
+                    end: sched.end,
+                    breakMin: shiftDuration(sched.start, sched.end) >= 6 ? s.settings.mealBreak : 0,
                     note: ''
                 };
-                empHours[e.id] += shiftDuration(shiftType.start, shiftType.end);
+                empHours[e.id] += shiftDuration(sched.start, sched.end);
                 assignments++;
             }
         }
@@ -778,6 +973,10 @@ function computeCoverageForDate(dateStr) {
         const roleId = parts[0];
         const shiftId = 's_' + parts[1];
 
+        // Ignorer si le shift est désactivé pour ce type de jour
+        const shiftType = s.shiftTypes.find(t => t.id === shiftId);
+        if (!shiftType || !getShiftSchedule(shiftType, dateStr)) continue;
+
         let count = 0;
         s.employees.forEach(e => {
             const sh = s.shifts[e.id + '_' + dateStr];
@@ -785,7 +984,7 @@ function computeCoverageForDate(dateStr) {
         });
 
         required += need;
-        assigned += Math.min(count, need); // ne pas compter le surplus
+        assigned += Math.min(count, need);
         const m = need - count;
         if (m > 0) missing += m;
 
@@ -824,11 +1023,13 @@ function renderCoverage() {
             const role = s.roles.find(r => r.id === det.roleId);
             const shift = s.shiftTypes.find(t => t.id === det.shiftId);
             if (!role || !shift) return '';
+            const sched = getShiftSchedule(shift, dateStr);
+            if (!sched) return ''; // shift désactivé ce jour
             let cls = 'ok';
             if (det.missing > 0) cls = 'danger';
             return `<div class="coverage-row">
                 <div class="role">${role.icon || ''} ${escapeHtml(role.name)}</div>
-                <div class="shift-info">${escapeHtml(shift.name)} · ${shift.start}-${shift.end}</div>
+                <div class="shift-info">${escapeHtml(shift.name)} · ${sched.start}-${sched.end}</div>
                 <div class="count ${cls}">${det.count}/${det.need}</div>
             </div>`;
         }).join('');
@@ -859,7 +1060,9 @@ function renderRequirementsTable(dayType) {
 
     let html = '<thead><tr><th>Poste \\ Shift</th>';
     s.shiftTypes.forEach(st => {
-        html += `<th>${escapeHtml(st.name)}<br><span style="font-weight:400;color:var(--text-dim);font-size:10px;font-family:'JetBrains Mono',monospace">${st.start}-${st.end}</span></th>`;
+        const sch = st.schedules?.[dayType];
+        const timeLabel = (sch && sch.enabled) ? `${sch.start}-${sch.end}` : '✗ désactivé ce jour';
+        html += `<th>${escapeHtml(st.name)}<br><span style="font-weight:400;color:var(--text-dim);font-size:10px;font-family:'JetBrains Mono',monospace">${timeLabel}</span></th>`;
     });
     html += '</tr></thead><tbody>';
 
@@ -868,7 +1071,9 @@ function renderRequirementsTable(dayType) {
         s.shiftTypes.forEach(st => {
             const key = role.id + '_' + st.id;
             const val = reqs[key] || 0;
-            html += `<td><input type="number" min="0" max="50" value="${val}" data-key="${key}" data-day-type="${dayType}"></td>`;
+            const sch = st.schedules?.[dayType];
+            const disabled = !sch || !sch.enabled;
+            html += `<td><input type="number" min="0" max="50" value="${val}" data-key="${key}" data-day-type="${dayType}" ${disabled ? 'disabled style="opacity:0.3"' : ''}></td>`;
         });
         html += '</tr>';
     });
@@ -1366,7 +1571,7 @@ function renderShiftPrefs(currentPrefs) {
                 <div class="pref-shift-color" style="background:${st.color}"></div>
                 <div>
                     <div class="pref-shift-name">${escapeHtml(st.name)}</div>
-                    <div class="pref-shift-time">${st.start} - ${st.end}</div>
+                    <div class="pref-shift-time">${getShiftDisplayTime(st)}</div>
                 </div>
             </div>
             <div class="pref-buttons">
@@ -1467,11 +1672,19 @@ function openShiftModal(empId, dateStr) {
     document.getElementById('shiftEmployeeInfo').innerHTML = `<span style="color:${emp.color}">●</span> ${escapeHtml(emp.name)} ${role ? '(' + role.icon + ' ' + role.name + ')' : ''}`;
     document.getElementById('shiftDateInfo').textContent = new Date(dateStr).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-    // Shift types select
+    // Shift types select - n'affiche que les shifts actifs ce jour-là
     const shiftSel = document.getElementById('shiftType');
-    shiftSel.innerHTML = '<option value="">-- Personnalisé --</option>' +
-        s.shiftTypes.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (${t.start} - ${t.end})</option>`).join('') +
-        '<option value="absence">⚠️ Marquer comme absent</option>';
+    const opts = ['<option value="">-- Personnalisé --</option>'];
+    s.shiftTypes.forEach(t => {
+        const sched = getShiftSchedule(t, dateStr);
+        if (sched) {
+            opts.push(`<option value="${t.id}">${escapeHtml(t.name)} (${sched.start} - ${sched.end})</option>`);
+        } else {
+            opts.push(`<option value="${t.id}" disabled>${escapeHtml(t.name)} (désactivé ce jour)</option>`);
+        }
+    });
+    opts.push('<option value="absence">⚠️ Marquer comme absent</option>');
+    shiftSel.innerHTML = opts.join('');
 
     // Role select
     const roleSel = document.getElementById('shiftRole');
@@ -1550,21 +1763,21 @@ function setupModalEvents() {
     });
 
     document.getElementById('shiftType').addEventListener('change', e => {
-        const t = S().shiftTypes.find(x => x.id === e.target.value);
-        if (t) {
-            document.getElementById('shiftStart').value = t.start;
-            document.getElementById('shiftEnd').value = t.end;
-            const dur = shiftDuration(t.start, t.end);
-            if (dur >= 6) document.getElementById('shiftBreak').value = S().settings.mealBreak || 30;
-        }
-        // Re-check alerts
-        const [empId, dateStr] = editingShiftKey.split('_');
-        // careful: empId can contain underscores; let's split on the LAST underscore
+        // Récupérer la date depuis editingShiftKey
         const idx = editingShiftKey.lastIndexOf('_');
         const eId = editingShiftKey.slice(0, idx);
         const dStr = editingShiftKey.slice(idx + 1);
-        // Actually our employee IDs start with 'e' not 'e_', so this works fine
-        // But to be safe we use the slice approach
+
+        const t = S().shiftTypes.find(x => x.id === e.target.value);
+        if (t) {
+            const sched = getShiftSchedule(t, dStr);
+            if (sched) {
+                document.getElementById('shiftStart').value = sched.start;
+                document.getElementById('shiftEnd').value = sched.end;
+                const dur = shiftDuration(sched.start, sched.end);
+                if (dur >= 6) document.getElementById('shiftBreak').value = S().settings.mealBreak || 30;
+            }
+        }
         checkShiftAlerts(eId, dStr);
     });
 
@@ -1812,6 +2025,7 @@ function renderSettings() {
     renderShiftsList();
     renderRolesList();
     renderHolidaysList();
+    renderSyncState();
 
     document.getElementById('deleteStationBtn').style.display =
         Object.keys(state.stations).length > 1 ? '' : 'none';
@@ -1856,26 +2070,35 @@ function renderHoursTable() {
 function renderShiftsList() {
     const s = S();
     const c = document.getElementById('shiftsList');
-    c.innerHTML = s.shiftTypes.map(st => `
+    c.innerHTML = s.shiftTypes.map(st => {
+        const w = st.schedules?.weekday;
+        const we = st.schedules?.weekend;
+        const ho = st.schedules?.holiday;
+        const fmt = (sch) => sch && sch.enabled ? `${sch.start}-${sch.end}` : '<span style="color:var(--danger)">✗</span>';
+        return `
         <div class="shift-setting-item" data-id="${st.id}">
             <div class="shift-color-dot" style="background:${st.color}"></div>
             <div class="shift-setting-info">
                 <div class="shift-setting-name">${escapeHtml(st.name)}</div>
-                <div class="shift-setting-time">${st.start} - ${st.end}</div>
+                <div class="shift-setting-time">
+                    <span title="Semaine">📅 ${fmt(w)}</span> &nbsp;
+                    <span title="Weekend">🎈 ${fmt(we)}</span> &nbsp;
+                    <span title="Férié">🎉 ${fmt(ho)}</span>
+                </div>
             </div>
             <div class="shift-setting-actions">
                 <button data-action="edit">Modifier</button>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
-    // Légende des shifts
+    // Légende des shifts (juste afficher horaires semaine en aperçu)
     const legend = document.getElementById('legendShifts');
     if (legend) {
         legend.innerHTML = s.shiftTypes.map(st => `
             <div class="legend-item">
                 <span class="legend-color" style="background:${st.color}"></span>
-                ${escapeHtml(st.name)} (${st.start}-${st.end})
+                ${escapeHtml(st.name)} (${getShiftDisplayTime(st)})
             </div>
         `).join('');
     }
@@ -1896,30 +2119,81 @@ function openShiftSettingModal(id = null) {
     document.getElementById('shiftSettingTitle').textContent = id ? 'Modifier le shift' : 'Nouveau shift';
     document.getElementById('deleteShiftSettingBtn').classList.toggle('hidden', !id);
 
+    const setSchedFields = (prefix, sch) => {
+        document.getElementById(`sched${prefix}Enabled`).checked = sch.enabled;
+        document.getElementById(`sched${prefix}Start`).value = sch.start;
+        document.getElementById(`sched${prefix}End`).value = sch.end;
+        document.getElementById(`sched${prefix}Start`).disabled = !sch.enabled;
+        document.getElementById(`sched${prefix}End`).disabled = !sch.enabled;
+    };
+
     if (id) {
         const st = s.shiftTypes.find(x => x.id === id);
         document.getElementById('shiftSetName').value = st.name;
-        document.getElementById('shiftSetStart').value = st.start;
-        document.getElementById('shiftSetEnd').value = st.end;
         document.getElementById('shiftSetColor').value = st.color;
+        const w = st.schedules?.weekday || { enabled: true, start: '08:00', end: '16:00' };
+        const we = st.schedules?.weekend || { enabled: true, start: '08:00', end: '16:00' };
+        const ho = st.schedules?.holiday || { enabled: true, start: '08:00', end: '16:00' };
+        setSchedFields('Weekday', w);
+        setSchedFields('Weekend', we);
+        setSchedFields('Holiday', ho);
     } else {
         document.getElementById('shiftSetName').value = '';
-        document.getElementById('shiftSetStart').value = '08:00';
-        document.getElementById('shiftSetEnd').value = '16:00';
         document.getElementById('shiftSetColor').value = '#3b82f6';
+        const def = { enabled: true, start: '08:00', end: '16:00' };
+        setSchedFields('Weekday', def);
+        setSchedFields('Weekend', def);
+        setSchedFields('Holiday', def);
     }
+
+    // Wire up enabled checkboxes pour griser les inputs
+    ['Weekday', 'Weekend', 'Holiday'].forEach(p => {
+        const cb = document.getElementById(`sched${p}Enabled`);
+        cb.onchange = () => {
+            document.getElementById(`sched${p}Start`).disabled = !cb.checked;
+            document.getElementById(`sched${p}End`).disabled = !cb.checked;
+        };
+    });
+
+    // Bouton de copie
+    const copyBtn = document.getElementById('copyWeekdayToWeekendBtn');
+    copyBtn.onclick = () => {
+        const wStart = document.getElementById('schedWeekdayStart').value;
+        const wEnd = document.getElementById('schedWeekdayEnd').value;
+        const wEnabled = document.getElementById('schedWeekdayEnabled').checked;
+        ['Weekend', 'Holiday'].forEach(p => {
+            document.getElementById(`sched${p}Enabled`).checked = wEnabled;
+            document.getElementById(`sched${p}Start`).value = wStart;
+            document.getElementById(`sched${p}End`).value = wEnd;
+            document.getElementById(`sched${p}Start`).disabled = !wEnabled;
+            document.getElementById(`sched${p}End`).disabled = !wEnabled;
+        });
+        toast('Horaires copiés', 'success');
+    };
+
     document.getElementById('shiftSettingModal').classList.remove('hidden');
 }
 
 function saveShiftSetting() {
     const s = S();
+    const name = document.getElementById('shiftSetName').value.trim();
+    if (!name) { toast('Nom requis', 'error'); return; }
+
+    const readSched = (prefix) => ({
+        enabled: document.getElementById(`sched${prefix}Enabled`).checked,
+        start: document.getElementById(`sched${prefix}Start`).value || '08:00',
+        end: document.getElementById(`sched${prefix}End`).value || '16:00'
+    });
+
     const data = {
-        name: document.getElementById('shiftSetName').value.trim(),
-        start: document.getElementById('shiftSetStart').value,
-        end: document.getElementById('shiftSetEnd').value,
-        color: document.getElementById('shiftSetColor').value
+        name,
+        color: document.getElementById('shiftSetColor').value,
+        schedules: {
+            weekday: readSched('Weekday'),
+            weekend: readSched('Weekend'),
+            holiday: readSched('Holiday')
+        }
     };
-    if (!data.name || !data.start || !data.end) { toast('Champs requis', 'error'); return; }
 
     if (editingShiftSettingId) {
         const idx = s.shiftTypes.findIndex(x => x.id === editingShiftSettingId);
@@ -1931,6 +2205,7 @@ function saveShiftSetting() {
     closeModal('shiftSettingModal');
     renderSettings();
     renderPlanning();
+    renderCoverage();
     toast('Shift enregistré', 'success');
 }
 
@@ -2486,6 +2761,117 @@ function setupExportImport() {
         switchView('planning');
         setTimeout(() => window.print(), 100);
     });
+}
+
+// ============== CLOUD SYNC EVENTS ==============
+function setupCloudEvents() {
+    const setupBtn = document.getElementById('setupCloudBtn');
+    const disconnectBtn = document.getElementById('disconnectCloudBtn');
+    const confirmBtn = document.getElementById('confirmCloudBtn');
+    const syncStatus = document.getElementById('syncStatus');
+
+    if (setupBtn) setupBtn.addEventListener('click', openCloudModal);
+    if (syncStatus) syncStatus.addEventListener('click', () => {
+        switchView('settings');
+        document.getElementById('setupCloudBtn').scrollIntoView({ behavior: 'smooth' });
+    });
+
+    if (disconnectBtn) disconnectBtn.addEventListener('click', () => {
+        if (!confirm('Déconnecter du cloud ? Tes données restent en local mais ne seront plus synchronisées.')) return;
+        Cloud.disconnect();
+        renderSyncState();
+        toast('Déconnecté du cloud', 'success');
+    });
+
+    if (confirmBtn) confirmBtn.addEventListener('click', confirmCloudSetup);
+}
+
+function openCloudModal() {
+    const cfg = Cloud.config || {};
+    document.getElementById('fbApiKey').value = cfg.apiKey || '';
+    document.getElementById('fbAuthDomain').value = cfg.authDomain || '';
+    document.getElementById('fbDatabaseURL').value = cfg.databaseURL || '';
+    document.getElementById('fbProjectId').value = cfg.projectId || '';
+    document.getElementById('cloudModal').classList.remove('hidden');
+}
+
+async function confirmCloudSetup() {
+    const config = {
+        apiKey: document.getElementById('fbApiKey').value.trim(),
+        authDomain: document.getElementById('fbAuthDomain').value.trim(),
+        databaseURL: document.getElementById('fbDatabaseURL').value.trim(),
+        projectId: document.getElementById('fbProjectId').value.trim()
+    };
+
+    if (!config.apiKey || !config.databaseURL) {
+        toast('API Key et Database URL sont requis', 'error');
+        return;
+    }
+    if (!config.databaseURL.startsWith('https://')) {
+        toast('Database URL doit commencer par https://', 'error');
+        return;
+    }
+
+    const action = document.getElementById('cloudInitAction').value;
+
+    // Si on est déjà connecté, déconnecter d'abord
+    if (Cloud.connected) Cloud.disconnect();
+
+    // Sauver la config et tenter la connexion
+    Cloud.saveConfig(config);
+    const ok = await Cloud.connect();
+    if (!ok) {
+        toast('Connexion impossible. Vérifie tes clés.', 'error', 5000);
+        return;
+    }
+
+    // Au premier setup, soit on push soit on pull
+    if (action === 'push') {
+        await Cloud.push();
+        toast('☁️ Données envoyées vers le cloud', 'success');
+    } else {
+        const remote = await Cloud.pull();
+        if (remote) {
+            Cloud.applyRemoteData(remote);
+            toast('☁️ Données récupérées du cloud', 'success');
+        } else {
+            // Pas de données distantes → push de ce qu'on a
+            await Cloud.push();
+            toast('☁️ Cloud vide, données locales envoyées', 'success');
+        }
+    }
+
+    closeModal('cloudModal');
+    renderSyncState();
+}
+
+function renderSyncState() {
+    const div = document.getElementById('syncCurrentState');
+    const disconnectBtn = document.getElementById('disconnectCloudBtn');
+    const setupBtn = document.getElementById('setupCloudBtn');
+    if (!div) return;
+
+    if (Cloud.connected) {
+        div.innerHTML = `
+            <div class="alert success">
+                <strong>✓ Connecté au cloud Firebase</strong><br>
+                <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-muted)">${escapeHtml(Cloud.config.databaseURL)}</span>
+                <br><br>
+                <strong>Pour partager avec ton équipe :</strong><br>
+                Donne-leur l'URL de cette page web. Ils verront automatiquement les mêmes données.
+            </div>`;
+        if (disconnectBtn) disconnectBtn.classList.remove('hidden');
+        if (setupBtn) setupBtn.textContent = '🔧 Modifier la configuration';
+    } else {
+        div.innerHTML = `
+            <div class="alert warning">
+                <strong>Mode local uniquement</strong><br>
+                Tes données sont stockées seulement dans ce navigateur.
+                Pour partager avec ton équipe, configure Firebase ci-dessous.
+            </div>`;
+        if (disconnectBtn) disconnectBtn.classList.add('hidden');
+        if (setupBtn) setupBtn.textContent = '🔧 Configurer la synchronisation';
+    }
 }
 
 // ============== INIT ==============

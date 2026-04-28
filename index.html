@@ -38,6 +38,10 @@
             </nav>
 
             <div class="sidebar-footer">
+                <div id="syncStatus" class="sync-status sync-local" title="Cliquer pour configurer la synchronisation">
+                    <span class="sync-dot"></span>
+                    <span class="sync-label">Local</span>
+                </div>
                 <button class="btn-export" id="exportBtn">💾 Exporter</button>
                 <button class="btn-import" id="importBtn">📥 Importer</button>
                 <input type="file" id="importFile" accept=".json" style="display:none">
@@ -248,6 +252,14 @@
                         <div id="holidaysList"></div>
                         <button class="btn-secondary" id="addHolidayBtn">+ Ajouter</button>
                         <button class="btn-secondary" id="autoHolidaysBtn">🇫🇷 Charger fériés FR</button>
+                    </div>
+
+                    <div class="settings-card">
+                        <h3>☁️ Synchronisation Cloud</h3>
+                        <p class="hint">Synchronise les données entre tous les appareils via Firebase. Tes employés voient les modifs en temps réel.</p>
+                        <div id="syncCurrentState"></div>
+                        <button class="btn-primary" id="setupCloudBtn" style="margin-top:10px">🔧 Configurer la synchronisation</button>
+                        <button class="btn-secondary hidden" id="disconnectCloudBtn" style="margin-top:6px">Se déconnecter du cloud</button>
                     </div>
 
                     <div class="settings-card danger">
@@ -511,30 +523,82 @@
 
     <!-- Modal Shift Settings -->
     <div class="modal-overlay hidden" id="shiftSettingModal">
-        <div class="modal">
+        <div class="modal modal-lg">
             <div class="modal-header">
                 <h2 id="shiftSettingTitle">Configurer un shift</h2>
                 <button class="modal-close" data-close-modal="shiftSettingModal">×</button>
             </div>
             <div class="modal-body">
-                <div class="form-row">
-                    <label>Nom du shift</label>
-                    <input type="text" id="shiftSetName" placeholder="Matin">
-                </div>
                 <div class="form-row dual">
                     <div>
-                        <label>Début</label>
-                        <input type="time" id="shiftSetStart">
+                        <label>Nom du shift</label>
+                        <input type="text" id="shiftSetName" placeholder="Matin">
                     </div>
                     <div>
-                        <label>Fin</label>
-                        <input type="time" id="shiftSetEnd">
+                        <label>Couleur</label>
+                        <input type="color" id="shiftSetColor">
                     </div>
                 </div>
-                <div class="form-row">
-                    <label>Couleur</label>
-                    <input type="color" id="shiftSetColor">
+
+                <div class="alert info" style="margin:14px 0">
+                    Définis les horaires pour chaque type de jour. Décoche pour désactiver le shift ce type de jour-là (ex: "pas de shift matin le weekend").
                 </div>
+
+                <!-- Semaine -->
+                <div class="schedule-block">
+                    <label class="schedule-label">
+                        <input type="checkbox" id="schedWeekdayEnabled" checked>
+                        <strong>📅 Semaine (Lun-Ven)</strong>
+                    </label>
+                    <div class="form-row dual">
+                        <div>
+                            <label>Début</label>
+                            <input type="time" id="schedWeekdayStart">
+                        </div>
+                        <div>
+                            <label>Fin</label>
+                            <input type="time" id="schedWeekdayEnd">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Weekend -->
+                <div class="schedule-block">
+                    <label class="schedule-label">
+                        <input type="checkbox" id="schedWeekendEnabled" checked>
+                        <strong>🎈 Weekend (Sam-Dim)</strong>
+                    </label>
+                    <div class="form-row dual">
+                        <div>
+                            <label>Début</label>
+                            <input type="time" id="schedWeekendStart">
+                        </div>
+                        <div>
+                            <label>Fin</label>
+                            <input type="time" id="schedWeekendEnd">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Férié -->
+                <div class="schedule-block">
+                    <label class="schedule-label">
+                        <input type="checkbox" id="schedHolidayEnabled" checked>
+                        <strong>🎉 Jours fériés</strong>
+                    </label>
+                    <div class="form-row dual">
+                        <div>
+                            <label>Début</label>
+                            <input type="time" id="schedHolidayStart">
+                        </div>
+                        <div>
+                            <label>Fin</label>
+                            <input type="time" id="schedHolidayEnd">
+                        </div>
+                    </div>
+                </div>
+
+                <button type="button" class="btn-secondary" id="copyWeekdayToWeekendBtn" style="margin-top:8px">📋 Copier semaine → weekend & férié</button>
             </div>
             <div class="modal-footer">
                 <button class="btn-danger hidden" id="deleteShiftSettingBtn">Supprimer</button>
@@ -714,7 +778,87 @@
         </div>
     </div>
 
-    <div id="toastContainer" class="toast-container"></div>
+    <!-- Modal Firebase Setup -->
+    <div class="modal-overlay hidden" id="cloudModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h2>☁️ Configurer la synchronisation Cloud (Firebase)</h2>
+                <button class="modal-close" data-close-modal="cloudModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert info" style="margin-bottom:14px">
+                    <strong>Pourquoi Firebase ?</strong><br>
+                    Avec Firebase, tes données sont stockées dans le cloud et synchronisées en temps réel entre tous les appareils (toi, tes équipes, tablette de la station).
+                    <br><br>
+                    <strong>C'est gratuit</strong> jusqu'à 1 Go de données et 100 connexions simultanées (largement suffisant pour une station).
+                </div>
+
+                <details class="cloud-help">
+                    <summary><strong>📖 Comment obtenir les clés Firebase ? (5 min)</strong></summary>
+                    <ol>
+                        <li>Va sur <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">console.firebase.google.com</a> et connecte-toi avec un compte Google</li>
+                        <li>Clique sur <strong>"Ajouter un projet"</strong> (ou "Add project") → donne-lui un nom (ex: "planning-station") → clique "Continuer" et désactive Google Analytics (pas utile)</li>
+                        <li>Une fois le projet créé, dans le menu de gauche, clique sur <strong>"Build"</strong> → <strong>"Realtime Database"</strong> → <strong>"Créer une base de données"</strong></li>
+                        <li>Choisis la région la plus proche → mode <strong>"démarrer en mode test"</strong> → "Activer"</li>
+                        <li>Toujours en haut à gauche, clique l'icône ⚙️ <strong>"Paramètres du projet"</strong></li>
+                        <li>Descends dans la section <strong>"Vos applications"</strong> → clique sur l'icône Web <strong>&lt;/&gt;</strong></li>
+                        <li>Donne un surnom à l'app (ex: "Planning") → "Enregistrer l'application"</li>
+                        <li>Tu verras un bloc de code. <strong>Copie les valeurs</strong> de <code>apiKey</code>, <code>authDomain</code>, <code>databaseURL</code>, <code>projectId</code> et colle-les ci-dessous</li>
+                    </ol>
+                    <p style="margin-top:8px"><strong>⚠️ Important :</strong> dans la Realtime Database, va dans l'onglet <strong>"Règles"</strong> et remplace par ceci pour autoriser l'écriture (mode public) :</p>
+                    <pre>{
+  "rules": {
+    ".read": true,
+    ".write": true
+  }
+}</pre>
+                    <p style="font-size:11px;color:var(--text-muted)">Cela rend les données accessibles à toute personne ayant ton URL Firebase. Pour plus de sécurité, demande-moi d'ajouter une protection par mot de passe.</p>
+                </details>
+
+                <div class="form-row" style="margin-top:14px">
+                    <label>API Key</label>
+                    <input type="text" id="fbApiKey" placeholder="AIzaSy...">
+                </div>
+                <div class="form-row">
+                    <label>Auth Domain</label>
+                    <input type="text" id="fbAuthDomain" placeholder="mon-projet.firebaseapp.com">
+                </div>
+                <div class="form-row">
+                    <label>Database URL</label>
+                    <input type="text" id="fbDatabaseURL" placeholder="https://mon-projet-default-rtdb.firebaseio.com">
+                </div>
+                <div class="form-row">
+                    <label>Project ID</label>
+                    <input type="text" id="fbProjectId" placeholder="mon-projet">
+                </div>
+
+                <div class="alert warning" style="margin-top:10px" id="cloudFirstSetupWarn">
+                    <strong>Au premier lancement,</strong> tu peux choisir : <strong>Pousser tes données locales</strong> vers le cloud (recommandé si tu as déjà tout configuré) ou <strong>Tirer les données du cloud</strong> (si quelqu'un d'autre a déjà mis les infos en ligne).
+                </div>
+
+                <div class="form-row" style="margin-top:10px">
+                    <label>Action au premier lancement</label>
+                    <select id="cloudInitAction">
+                        <option value="push">↑ Pousser mes données locales vers le cloud (écrase le cloud)</option>
+                        <option value="pull">↓ Tirer les données du cloud (écrase mes données locales)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="modal-footer-right">
+                    <button class="btn-secondary" data-close-modal="cloudModal">Annuler</button>
+                    <button class="btn-primary" id="confirmCloudBtn">Connecter</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK (chargé seulement si config fournie) -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+        import { getDatabase, ref, onValue, set, get, off } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+        window.__firebase = { initializeApp, getDatabase, ref, onValue, set, get, off };
+    </script>
 
     <script src="script.js"></script>
 </body>

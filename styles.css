@@ -1512,3 +1512,73 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+/* Schedule blocks dans modal shift */
+.schedule-block {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+
+.schedule-label {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-size: 13px !important;
+    color: var(--text) !important;
+    font-weight: 500 !important;
+    cursor: pointer;
+}
+
+.schedule-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.schedule-block .form-row {
+    margin-bottom: 0;
+}
+
+/* Sync indicator */
+.sync-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: background 0.15s;
+    background: var(--bg-3);
+}
+
+.sync-status:hover { background: var(--border); }
+.sync-status .sync-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.sync-status.sync-local .sync-dot { background: var(--text-muted); }
+.sync-status.sync-connecting .sync-dot { background: var(--warning); animation: pulse 1s infinite; }
+.sync-status.sync-connected .sync-dot { background: var(--success); }
+.sync-status.sync-error .sync-dot { background: var(--danger); }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Cloud help */
+.cloud-help { margin: 12px 0; }
+.cloud-help summary { cursor: pointer; padding: 8px; background: var(--bg-3); border-radius: var(--radius-sm); font-size: 13px; }
+.cloud-help summary:hover { background: var(--border); }
+.cloud-help[open] summary { margin-bottom: 10px; }
+.cloud-help ol { padding-left: 20px; font-size: 13px; line-height: 1.7; }
+.cloud-help li { margin-bottom: 6px; }
+.cloud-help a { color: var(--primary); text-decoration: none; }
+.cloud-help a:hover { text-decoration: underline; }
+.cloud-help pre { background: var(--bg); padding: 10px; border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace; font-size: 12px; overflow-x: auto; margin-top: 6px; border: 1px solid var(--border); }
+.cloud-help code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
