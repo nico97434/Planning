@@ -1035,14 +1035,15 @@ function autoFillWeek() {
         // Mais respecter la base si l'employé a une pref "must"
         const pref = getShiftPref(employee, shiftId);
         if (pref === 'must') return { start: sched.start, end: sched.end };
-        // Variation aléatoire douce : ±30 min sur le start, conserver durée
+        // Variation : décalage aléatoire entre -30 et +120 min sur le start, conserver durée
         const baseStart = timeToMin(sched.start);
         const baseEnd = timeToMin(sched.end);
         const dur = baseEnd > baseStart ? baseEnd - baseStart : (baseEnd + 24*60 - baseStart);
-        // Décalage entre -30 et +120 min selon profil
-        const variations = [0, 30, 60, 90];
+        // Plus large palette de variations
+        const variations = [-30, 0, 30, 60, 90, 120, 150];
         const idx = Math.floor(Math.random() * variations.length);
-        const newStart = baseStart + variations[idx];
+        let newStart = baseStart + variations[idx];
+        if (newStart < 0) newStart = 0; // pas avant minuit
         const newEnd = newStart + dur;
         const fmt = (m) => `${String(Math.floor(m/60) % 24).padStart(2,'0')}:${String(m % 60).padStart(2,'0')}`;
         return { start: fmt(newStart), end: fmt(newEnd) };
@@ -1105,34 +1106,31 @@ function autoFillWeek() {
                     else if (pref === 'avoid') score -= 60;
 
                     // 2) ÉQUILIBRE D'HEURES sur historique récent
-                    // Si l'employé a un solde positif (a fait beaucoup d'heures les dernières semaines),
-                    // pénaliser pour le faire moins travailler cette semaine
-                    score -= hist.balance * 3;
+                    // Si solde positif (a fait des heures supp les dernières semaines), pénaliser
+                    score -= hist.balance * 2;
                     // Et si déjà beaucoup d'heures cette semaine, baisser
                     const ratioThisWeek = empHoursThisWeek[e.id] / e.hoursPerWeek;
-                    score -= ratioThisWeek * 30;
+                    score -= ratioThisWeek * 25;
 
                     // 3) ROLE PRINCIPAL préféré
                     if (e.role === roleIdClean) score += 8;
 
-                    // 4) SHIFTS MATINAUX → faire tourner
-                    // Si shift matinal et l'employé en a déjà fait beaucoup récemment, pénaliser
+                    // 4) SHIFTS MATINAUX → faire tourner (pénalité MODÉRÉE)
+                    // L'idée : varier qui est du matin entre les semaines, pas fuir le matin
                     if (isEarlyShift) {
-                        score -= hist.earlyShiftCount * 4;
-                        score -= empEarlyThisWeek[e.id] * 8;
+                        // Pénalité progressive : peu si récemment fait peu, beaucoup si surchargé
+                        // Normalisée sur 4 semaines × 5j = max ~20 shifts
+                        score -= Math.min(hist.earlyShiftCount, 12) * 1.5;
+                        // Pénalité forte si déjà 2+ matinaux cette semaine (étalement intra-semaine)
+                        score -= empEarlyThisWeek[e.id] * 12;
                     }
 
-                    // 5) WEEKEND → privilégier ceux qui ont peu eu de weekends OFF récemment
+                    // 5) WEEKEND → privilégier la rotation
                     if (isWeekendDay) {
-                        // Plus l'employé a eu de weekends off, moins il est prioritaire pour bosser ce weekend
-                        // (= il a "déjà eu sa pause", c'est au tour des autres d'être off)
-                        // Inversement, ceux avec peu de weekends off = il faut les faire bosser moins le weekend
-                        // Logique : on cherche à équilibrer → priorité à ceux qui ont eu PEU de weekends off (donc score positif)
-                        // → ils ont déjà bossé les weekends, donc on continue. Non, on veut l'inverse !
-                        // Inversion : ceux qui ont eu BEAUCOUP de weekends off → c'est leur tour de bosser
-                        score += hist.weekendOffCount * 6;
-                        // Pénaliser ceux déjà à 2 jours weekend cette semaine
-                        score -= empWeekendDays[e.id] * 30;
+                        // Plus l'employé a eu de weekends off, plus il est candidat pour bosser ce weekend
+                        score += hist.weekendOffCount * 8;
+                        // Si déjà 2 jours weekend cette semaine, pénaliser fortement
+                        score -= empWeekendDays[e.id] * 35;
                     }
 
                     // 6) RÉPARTITION DES TYPES DE SHIFT
@@ -1148,17 +1146,37 @@ function autoFillWeek() {
                     if (empConsecutiveDays[e.id] >= 5) score -= 50;
                     else if (empConsecutiveDays[e.id] >= 4) score -= 20;
 
-                    // 8) BRUIT ALÉATOIRE pour casser les ex-aequos et varier d'une exécution à l'autre
-                    score += (Math.random() - 0.5) * 8;
+                    // 8) BRUIT ALÉATOIRE pour vraiment casser la monotonie
+                    // (assez fort pour permettre des variations visibles, mais sans dominer les vrais signaux)
+                    score += (Math.random() - 0.5) * 40;
 
                     return { emp: e, score };
                 })
                 .sort((a, b) => b.score - a.score);
 
-            // Affecter les meilleurs candidats
-            for (let n = 0; n < missing && n < candidates.length; n++) {
-                const e = candidates[n].emp;
-                // Variation des horaires (sauf si pref must)
+            // Affectation : on prend les meilleurs candidats, mais avec une touche de hasard
+            // pour ne pas TOUJOURS prendre le top 1 quand le top 2 et 3 sont presque aussi bons.
+            // Sélection par tirage pondéré dans le top (missing+2) candidats.
+            const picked = [];
+            const pool = candidates.slice(0, missing + 3); // un peu plus large que strictement nécessaire
+            for (let n = 0; n < missing && pool.length > 0; n++) {
+                // Tirage pondéré : pousser les scores positifs, ramener les négatifs vers 0
+                const minScore = Math.min(...pool.map(c => c.score));
+                const offset = minScore < 0 ? -minScore + 1 : 1;
+                const weights = pool.map(c => Math.pow(c.score + offset, 2)); // carré pour favoriser fort les bons
+                const totalW = weights.reduce((a, b) => a + b, 0);
+                let r = Math.random() * totalW;
+                let pickedIdx = 0;
+                for (let i = 0; i < weights.length; i++) {
+                    r -= weights[i];
+                    if (r <= 0) { pickedIdx = i; break; }
+                }
+                picked.push(pool[pickedIdx]);
+                pool.splice(pickedIdx, 1);
+            }
+
+            for (const cand of picked) {
+                const e = cand.emp;
                 const finalSched = variedSchedule(sched, e, shiftIdClean);
                 const dur = shiftDuration(finalSched.start, finalSched.end);
                 s.shifts[e.id + '_' + dateStr] = {
