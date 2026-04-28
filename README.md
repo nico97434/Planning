@@ -1,175 +1,125 @@
-# ⛽ Planning Station-Service
+# Planning Station-Service v2
 
-Application web complète et **100% locale** pour gérer les plannings de votre station-service. Inspirée de Combo, sans serveur ni base de données : tout fonctionne dans le navigateur grâce au `localStorage`.
+Application web de gestion de planning pour station-service, **avec effectifs minimums obligatoires, préférences employés et horaires d'ouverture par station**. Tout en local dans le navigateur, aucune connexion serveur requise.
 
-![Aucune dépendance](https://img.shields.io/badge/Dependencies-0-success)
-![Vanilla JS](https://img.shields.io/badge/JavaScript-Vanilla-yellow)
-![License MIT](https://img.shields.io/badge/License-MIT-blue)
+## 🆕 Nouveautés v2
 
-## ✨ Fonctionnalités
+- **Effectifs minimums** par poste, par shift et par type de jour (semaine / weekend / férié)
+  → ex: « toujours 3 pompistes le matin et 2 caissières l'après-midi »
+- **Préférences employés** par shift (5 niveaux : Doit / Préfère / Neutre / Éviter / Impossible)
+  → l'auto-remplissage en tient compte automatiquement
+- **Horaires d'ouverture par station** (chaque station a ses propres horaires par jour de la semaine)
+- **Multi-stations** (plusieurs stations dans une même app)
+- **Vue Couverture** temps réel : voir ce qui est couvert et ce qui manque
+- **Vue Mensuelle** complète avec mini-shifts
+- **Drag & drop** des shifts entre cellules
+- **Templates de semaine** réapplicables en un clic
+- **Alertes intelligentes** : sous-effectif, repos non respecté, heures supp, préférences violées, anniversaires...
+- **Polyvalence** : un employé peut couvrir plusieurs postes
+- **Import depuis v1** automatique
 
-### 📅 Planning hebdomadaire
-- Vue calendrier 7 jours x N employés
-- Navigation entre semaines (précédente / suivante / aujourd'hui)
-- Affectation rapide d'un shift en cliquant sur une cellule
-- Shifts personnalisables (Matin, Après-midi, Nuit, Journée…) avec heures et couleurs
-- Calcul automatique des heures travaillées (avec gestion des pauses et shifts de nuit)
-- Indicateurs visuels : sous-quota (jaune), au-dessus (rouge), conforme (vert)
+## 🚀 Démarrer
 
-### 👥 Gestion des employés
-- Nombre illimité d'employés
-- Heures contractuelles personnalisables par employé
-- Disponibilités hebdomadaires (jours travaillables)
-- Coordonnées (téléphone, email)
-- Couleur d'identification
-- Compteur automatique de congés pris / restants
+Aucune installation. Ouvre `index.html` dans un navigateur. C'est tout.
 
-### 🏖️ Gestion des congés
-- Demandes : congés payés, RTT, maladie, formation, sans solde, absence
-- Statuts : en attente / approuvé / refusé
-- Affichage automatique sur le planning quand approuvé
-- Calcul auto du nombre de jours pris et restants par employé
-- Vue de synthèse globale
+Pour publier en ligne :
+1. Crée un dépôt GitHub
+2. Pousse les 4 fichiers (`index.html`, `styles.css`, `script.js`, `LICENSE`)
+3. Active **GitHub Pages** dans Settings → Pages → Source : `main`
+4. Tu accèdes à l'app via `https://<ton-user>.github.io/<ton-repo>`
 
-### ⚡ Modifications de dernière minute
-- Marquer un employé comme **absent** en un clic
-- Ajouter une note (motif, remplaçant…)
-- Le planning et les statistiques se mettent à jour instantanément
-- Possibilité de modifier ou supprimer n'importe quel shift à tout moment
+## 📋 Guide d'utilisation
 
-### 📊 Statistiques
-- Heures totales par semaine
-- Coût estimatif (paramétrable)
-- Charge horaire par jour (barres de progression)
-- Effectif présent par jour
-- Heures par employé vs contrat
+### 1. Configurer les **postes** (rôles)
+Settings → "Postes / rôles" → ajoute Pompiste, Caissier, Manager, etc.
+Chaque poste a un nom, une couleur, un emoji.
 
-### 🤖 Outils intelligents
-- **Auto-remplissage** : génère un planning automatique en respectant disponibilités, congés et quotas
-- **Copier la semaine** : duplique tout le planning vers la semaine suivante
-- **Vider la semaine** en un clic
+### 2. Configurer les **shifts** (créneaux types)
+Settings → "Shifts" → 3 par défaut : Matin (06-14), Après-midi (14-22), Nuit (22-06).
+Tu peux les modifier ou en ajouter.
 
-### ⚙️ Paramètres avancés
-- Horaires d'ouverture (avec mode 24h/24)
-- Effectif minimum requis
-- Heures hebdomadaires standard
-- Repos minimum entre 2 shifts (norme légale 11h)
-- Création / modification de types de shifts personnalisés
+### 3. Configurer les **horaires d'ouverture**
+Settings → "Horaires d'ouverture (de cette station)"
+Pour chaque jour de la semaine, indique l'heure d'ouverture/fermeture, ou coche "Fermé".
+**Chaque station a ses propres horaires.** Si tu en as 2, tu les configures séparément.
 
-### 💾 Export / Import
-- Exporter toutes les données en JSON (sauvegarde)
-- Importer un fichier de sauvegarde
-- Aucune donnée ne quitte votre navigateur
+### 4. Définir les **effectifs minimums**
+Vue Couverture → bouton "⚙️ Configurer minimums"
+Trois onglets : Semaine / Weekend / Jours fériés
+Pour chaque combinaison Poste × Shift, indique le minimum requis :
+- 3 pompistes le matin
+- 2 caissières l'après-midi
+- 1 manager le matin
+- etc.
 
-## 🚀 Installation
+### 5. Ajouter les **employés**
+Vue Employés → "+ Ajouter un employé"
 
-### Option 1 : Utilisation locale (le plus simple)
-1. Téléchargez ou clonez ce dépôt
-2. Ouvrez `index.html` dans votre navigateur
-3. C'est prêt ! Vos données sont sauvegardées dans le navigateur
+3 onglets dans la fiche employé :
+- **Général** : nom, poste principal, postes secondaires (polyvalence), couleur, contact, notes
+- **Contrat** : type de contrat, date d'embauche, heures hebdo, congés annuels, tarif horaire
+- **Préférences** : disponibilités par jour + préférences par shift (5 niveaux)
 
-```bash
-git clone https://github.com/VOTRE-USERNAME/planning-station.git
-cd planning-station
-# Ouvrir index.html dans Chrome / Firefox / Safari / Edge
-```
+### 6. Faire le planning
+Vue Planning → clique sur une cellule pour affecter un shift, ou utilise **"✨ Auto-remplir"** pour que l'app affecte automatiquement les employés en :
+- respectant les minimums requis
+- respectant les disponibilités
+- privilégiant les préférences (Doit > Préfère > Neutre > Éviter)
+- évitant les "Impossible"
+- équilibrant les heures par employé
 
-### Option 2 : Hébergement gratuit avec GitHub Pages
-1. Forkez ou créez un dépôt avec ces fichiers
-2. Allez dans **Settings → Pages**
-3. Source : `Deploy from a branch` → `main` → `/ (root)`
-4. Votre planning est accessible à `https://VOTRE-USERNAME.github.io/planning-station/`
+Tu peux ensuite ajuster manuellement par drag & drop.
 
-### Option 3 : Serveur local (recommandé pour dev)
-```bash
-# Avec Python
-python3 -m http.server 8000
+### 7. Templates
+Sauvegarde une semaine type ("Semaine standard", "Été", "Vacances scolaires"…) puis réapplique-la en un clic plus tard.
 
-# Ou avec Node
-npx serve
+## 🎯 Vue Couverture
 
-# Puis ouvrir http://localhost:8000
-```
+Indique en temps réel pour chaque jour de la semaine :
+- Quels minimums sont **couverts** (✓ vert)
+- Ce qui **manque** (rouge)
 
-## 📖 Guide d'utilisation rapide
+Le bandeau de couverture en haut du planning montre l'état de chaque jour d'un coup d'œil.
 
-### Premier lancement
-L'application contient 4 employés de démo et 4 types de shifts pré-configurés. Vous pouvez :
-- Les modifier (clic sur la carte employé)
-- Les supprimer
-- Réinitialiser via **Paramètres → Zone dangereuse**
+## ⚠️ Alertes automatiques
 
-### Créer un planning
-1. Allez dans **Planning**
-2. Cliquez sur une cellule vide (intersection employé / jour)
-3. Sélectionnez un type de shift (les heures se remplissent automatiquement)
-4. Ajoutez une note si besoin
-5. **Enregistrer**
+L'app détecte automatiquement :
+- Sous-effectif sur un poste/shift
+- Repos < minimum entre deux shifts
+- Heures supplémentaires excessives (>15% du contrat)
+- Sous-quota d'heures (<85% du contrat)
+- Affectation sur un shift marqué "impossible" ou "à éviter"
+- Demandes de congés en attente
+- Anniversaires à venir
 
-### Gérer une absence imprévue
-1. Cliquez sur le shift concerné
-2. Sélectionnez **"⚠️ Marquer comme absent"**
-3. Notez la raison (ex: "Maladie - prévenu à 6h")
-4. Le shift apparaît avec hachures rouges
-5. Affectez un autre employé sur la même journée si besoin
+## 💾 Données
 
-### Demande de congé
-1. **Congés → Nouvelle demande**
-2. Choisissez l'employé, le type, les dates
-3. Statut = **Approuvé** → apparaît automatiquement sur le planning
-4. Le compteur de jours restants se met à jour
+Stockées localement dans le navigateur (`localStorage`).
+Pour sauvegarder : bouton **"💾 Exporter"** → fichier JSON.
+Pour restaurer : bouton **"📥 Importer"** → sélectionne un JSON.
 
-### Auto-remplir une semaine
-1. Configurez bien :
-   - Les disponibilités de chaque employé
-   - Les types de shifts à pourvoir
-   - L'effectif minimum (Paramètres)
-2. Clic sur **✨ Auto-remplir**
-3. L'algo affecte les employés en équilibrant les heures et respectant les contraintes
+**L'import depuis la v1 est automatique** : tes données v1 seront migrées au format v2.
 
-## 📁 Structure du projet
+## 🖨️ Impression
 
-```
-planning-station/
-├── index.html      # Interface complète
-├── styles.css      # Tous les styles
-├── script.js       # Logique applicative
-├── README.md       # Ce fichier
-├── .gitignore
-└── LICENSE
-```
+Bouton **"🖨️ Imprimer"** : génère un planning propre en mode paysage, parfait pour l'afficher en pause.
 
-## 🔒 Confidentialité
+## 🏪 Multi-stations
 
-**Toutes vos données restent dans votre navigateur** (localStorage). Aucun serveur, aucune télémétrie, aucun cookie tiers. Pour les sauvegarder, utilisez le bouton **Exporter** régulièrement.
+Le sélecteur de station en haut à gauche permet de basculer entre plusieurs stations. Chaque station a ses propres :
+- Employés, shifts, rôles, congés
+- Horaires d'ouverture
+- Effectifs minimums
+- Templates
+- Jours fériés
 
-⚠️ **Important** : si vous videz le cache de votre navigateur ou utilisez la navigation privée, vos données peuvent être perdues. Pensez à exporter régulièrement.
+## 🎨 Personnalisation
 
-## 🛠️ Technologies
+- Couleurs par employé, shift, poste
+- Horaires de shifts personnalisables
+- Postes personnalisables avec emoji
+- Règles configurables : heures hebdo standard, repos minimum, pause repas auto, tarif horaire
 
-- HTML5 / CSS3 (variables CSS, Grid, Flexbox)
-- JavaScript Vanilla (ES2020+)
-- LocalStorage API
-- **Aucune dépendance externe**, aucun framework, aucun build
+## 📄 Licence
 
-## 🗺️ Améliorations possibles
-
-- [ ] Drag & drop pour déplacer les shifts
-- [ ] Vue mensuelle
-- [ ] Export PDF / impression
-- [ ] Multi-utilisateurs avec backend (Firebase, Supabase…)
-- [ ] Notifications de conflits d'horaires
-- [ ] Historique des modifications
-- [ ] Mode clair / sombre
-
-## 📝 Licence
-
-MIT — utilisation libre, commerciale ou non.
-
-## 🤝 Contribution
-
-Les pull requests sont les bienvenues. Pour des changements majeurs, ouvrez d'abord une issue pour discuter de ce que vous aimeriez modifier.
-
----
-
-Développé pour simplifier la vie des gérants de stations-service. 🛢️
+MIT
