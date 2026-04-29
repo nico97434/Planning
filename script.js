@@ -1039,14 +1039,18 @@ function autoFillWeek() {
     });
 
     // Calculer le nombre de jours travaillés cible pour chaque employé
-    // = min(5, jours dispo). Si certains employés sont à temps partiel (hoursPerWeek < 35),
-    // on ajuste : ex 28h/35 = 4j; 21h = 3j
+    // = 5 jours pour un temps plein (35h ÷ 7h moy). Si solde négatif sur 4 semaines,
+    // on augmente le nb de jours pour compenser. Si positif, on baisse.
     const empTargetWorkDays = {};
     s.employees.forEach(e => {
         const dispo = (e.availableDays && e.availableDays.length) ? e.availableDays.length : 7;
-        // Estimation : 1 shift moyen = 7h. On veut hoursPerWeek ÷ 7
-        const fromHours = Math.round(e.hoursPerWeek / 7);
-        empTargetWorkDays[e.id] = Math.min(dispo, Math.max(3, Math.min(6, fromHours)));
+        // Base : 5 jours pour 35h, 4 pour 28h, 3 pour 21h
+        let baseDays = Math.round(e.hoursPerWeek / 7);
+        // Correction selon le solde historique : si en déficit récemment, on charge plus
+        const balance = empHistory[e.id].balance;
+        if (balance < -10) baseDays = Math.min(6, baseDays + 1); // déficit → +1 jour
+        else if (balance > 10) baseDays = Math.max(3, baseDays - 1); // excédent → -1 jour
+        empTargetWorkDays[e.id] = Math.min(dispo, Math.max(3, Math.min(6, baseDays)));
     });
 
     // Calculer combien de jours TOTAL on peut couvrir
@@ -1175,12 +1179,16 @@ function autoFillWeek() {
             const isEarlyShift = timeToMin(sched.start) <= 6 * 60;
 
             // Candidats : ceux qui ont décidé de bosser ce jour ET sont du bon rôle
+            // PLAFOND : on n'envoie plus quelqu'un qui dépasse déjà son contrat hebdo
+            const dur = shiftDuration(sched.start, sched.end);
             const candidates = s.employees
                 .filter(e => {
                     if (!empWorksOnDay[e.id].has(dayIdx)) return false; // pas prévu de bosser ce jour
                     if (e.role !== roleIdClean && !(e.secondaryRoles || []).includes(roleIdClean)) return false;
                     if (s.shifts[e.id + '_' + dateStr]) return false; // déjà un shift ce jour
                     if (getShiftPref(e, shiftIdClean) === 'impossible') return false;
+                    // Plafond strict : ne pas dépasser de plus de 3h le contrat hebdo
+                    if (empHoursThisWeek[e.id] + dur > e.hoursPerWeek + 3) return false;
                     return true;
                 })
                 .map(e => {
@@ -1192,9 +1200,15 @@ function autoFillWeek() {
                     else if (pref === 'prefer') score += 50;
                     else if (pref === 'avoid') score -= 60;
 
-                    // Équilibre heures
+                    // Équilibre heures (historique sur 4 semaines)
                     score -= hist.balance * 2;
-                    score -= (empHoursThisWeek[e.id] / Math.max(1, e.hoursPerWeek)) * 20;
+
+                    // Heures déjà cette semaine - pénalité PROGRESSIVE
+                    const ratio = empHoursThisWeek[e.id] / Math.max(1, e.hoursPerWeek);
+                    if (ratio < 0.7) score += 20; // bonus si en dessous de 70% du contrat (priorité aux sous-employés)
+                    else if (ratio > 1.0) score -= 80; // forte pénalité si dépasse le contrat
+                    else if (ratio > 0.9) score -= 30; // modérée si proche du plafond
+                    else score -= ratio * 15;
 
                     // Rôle principal
                     if (e.role === roleIdClean) score += 8;
@@ -1317,6 +1331,81 @@ function autoFillWeek() {
                 if (timeToMin(finalSched.start) <= 6 * 60) empEarlyThisWeek[e.id]++;
                 assignments++;
             }
+        }
+    });
+
+    // ============== PHASE 4 : Compensation des heures (équité) ==============
+    // Pour chaque employé largement en dessous de son objectif (>5h en déficit),
+    // chercher des shifts vacants ou en double pour compenser
+    s.employees.forEach(emp => {
+        const target = emp.hoursPerWeek;
+        const current = empHoursThisWeek[emp.id];
+        const deficit = target - current;
+        if (deficit < 5) return;
+        if (empDaysThisWeek[emp.id] >= 6) return;
+
+        for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+            if (empHoursThisWeek[emp.id] >= target - 2) break;
+            if (empDaysThisWeek[emp.id] >= 6) break;
+            const d = weekDates[dayIdx];
+            const dStr = formatDate(d);
+            if (getEmployeeAvailability(emp, dStr) !== 'available') continue;
+            if (s.shifts[emp.id + '_' + dStr]) continue;
+            if (dayIdx >= 5 && empWeekendDays[emp.id] >= 2) continue;
+
+            const dayType = getDayType(dStr);
+            const reqs = s.requirements[dayType] || {};
+            const candidateShifts = [];
+            for (const reqKey in reqs) {
+                const need = reqs[reqKey];
+                if (need <= 0) continue;
+                const parts = reqKey.split('_s_');
+                const roleIdClean = parts[0];
+                const shiftIdClean = 's_' + parts[1];
+                if (emp.role !== roleIdClean && !(emp.secondaryRoles || []).includes(roleIdClean)) continue;
+                if (getShiftPref(emp, shiftIdClean) === 'impossible') continue;
+                const shiftType = s.shiftTypes.find(st => st.id === shiftIdClean);
+                if (!shiftType) continue;
+                const sched = getShiftSchedule(shiftType, dStr);
+                if (!sched) continue;
+                let alreadyAssigned = 0;
+                s.employees.forEach(e => {
+                    const sh = s.shifts[e.id + '_' + dStr];
+                    if (sh && sh.type === shiftIdClean && sh.role === roleIdClean) alreadyAssigned++;
+                });
+                // Score : sous-effectif strict = priorité haute. Si déjà couvert mais que l'employé
+                // est en déficit, on permet quand même d'ajouter un shift "extra" (renfort)
+                const understaffed = Math.max(0, need - alreadyAssigned);
+                let score = understaffed * 80;
+                // Si déjà couvert : permettre quand même d'ajouter un renfort sur shifts populaires
+                if (understaffed === 0 && deficit >= 7) score += 10; // permettre extra
+                const pref = getShiftPref(emp, shiftIdClean);
+                if (pref === 'must') score += 100;
+                else if (pref === 'prefer') score += 30;
+                else if (pref === 'avoid') score -= 25;
+                if (emp.role === roleIdClean) score += 5;
+                candidateShifts.push({ shiftId: shiftIdClean, roleId: roleIdClean, sched, score });
+            }
+            if (candidateShifts.length === 0) continue;
+            candidateShifts.sort((a, b) => b.score - a.score);
+            const best = candidateShifts[0];
+            if (best.score < 0 && deficit < 10) continue;
+            const dur = shiftDuration(best.sched.start, best.sched.end);
+            if (current + dur > target + 6) continue;
+
+            s.shifts[emp.id + '_' + dStr] = {
+                type: best.shiftId,
+                role: best.roleId,
+                start: best.sched.start,
+                end: best.sched.end,
+                breakMin: dur >= 6 ? s.settings.mealBreak : 0,
+                note: ''
+            };
+            empHoursThisWeek[emp.id] += dur;
+            empDaysThisWeek[emp.id]++;
+            if (dayIdx >= 5) empWeekendDays[emp.id]++;
+            if (timeToMin(best.sched.start) <= 6 * 60) empEarlyThisWeek[emp.id]++;
+            assignments++;
         }
     });
 
