@@ -1139,19 +1139,10 @@ function autoFillWeek() {
         });
     });
 
+    // Pas de variation d'horaires : on respecte fidèlement les horaires configurés
+    // dans les shifts. La variation se fait sur QUI fait quel shift, pas sur les horaires.
     function variedSchedule(sched, employee, shiftId) {
-        const pref = getShiftPref(employee, shiftId);
-        if (pref === 'must') return { start: sched.start, end: sched.end };
-        const baseStart = timeToMin(sched.start);
-        const baseEnd = timeToMin(sched.end);
-        const dur = baseEnd > baseStart ? baseEnd - baseStart : (baseEnd + 24*60 - baseStart);
-        const variations = [-30, 0, 30, 60, 90, 120];
-        const idx = Math.floor(Math.random() * variations.length);
-        let newStart = baseStart + variations[idx];
-        if (newStart < 0) newStart = 0;
-        const newEnd = newStart + dur;
-        const fmt = (m) => `${String(Math.floor(m/60) % 24).padStart(2,'0')}:${String(m % 60).padStart(2,'0')}`;
-        return { start: fmt(newStart), end: fmt(newEnd) };
+        return { start: sched.start, end: sched.end };
     }
 
     // Pour chaque jour, placer les shifts
