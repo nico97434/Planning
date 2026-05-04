@@ -1187,8 +1187,15 @@ function autoFillWeek() {
                     if (e.role !== roleIdClean && !(e.secondaryRoles || []).includes(roleIdClean)) return false;
                     if (s.shifts[e.id + '_' + dateStr]) return false; // déjà un shift ce jour
                     if (getShiftPref(e, shiftIdClean) === 'impossible') return false;
-                    // Plafond strict : ne pas dépasser de plus de 3h le contrat hebdo
-                    if (empHoursThisWeek[e.id] + dur > e.hoursPerWeek + 3) return false;
+                    // Plafond strict ADAPTATIF : si solde mensuel positif, plafond plus bas
+                    // Ex : solde +8h sur 4 sem → plafond cette sem = contrat -2h
+                    //      solde -8h sur 4 sem → plafond cette sem = contrat +5h
+                    const monthlyBalance = empHistory[e.id].balance;
+                    let weekCap = e.hoursPerWeek + 3; // base : +3h
+                    if (monthlyBalance > 6) weekCap = e.hoursPerWeek - 1; // déjà en sup → on freine
+                    else if (monthlyBalance > 3) weekCap = e.hoursPerWeek + 1;
+                    else if (monthlyBalance < -6) weekCap = e.hoursPerWeek + 5; // gros déficit → permettre rattrapage
+                    if (empHoursThisWeek[e.id] + dur > weekCap) return false;
                     return true;
                 })
                 .map(e => {
@@ -1200,14 +1207,16 @@ function autoFillWeek() {
                     else if (pref === 'prefer') score += 50;
                     else if (pref === 'avoid') score -= 60;
 
-                    // Équilibre heures (historique sur 4 semaines)
-                    score -= hist.balance * 2;
+                    // Équilibre heures (historique sur 4 semaines) — POIDS FORT
+                    // +6h sur 4 sem → -30 pts ; -6h → +30 pts
+                    score -= hist.balance * 5;
 
                     // Heures déjà cette semaine - pénalité PROGRESSIVE
                     const ratio = empHoursThisWeek[e.id] / Math.max(1, e.hoursPerWeek);
-                    if (ratio < 0.7) score += 20; // bonus si en dessous de 70% du contrat (priorité aux sous-employés)
-                    else if (ratio > 1.0) score -= 80; // forte pénalité si dépasse le contrat
-                    else if (ratio > 0.9) score -= 30; // modérée si proche du plafond
+                    if (ratio < 0.5) score += 40;     // gros bonus si moins de 50% du contrat
+                    else if (ratio < 0.7) score += 20; // bonus si en dessous de 70%
+                    else if (ratio > 1.0) score -= 100; // forte pénalité si dépasse le contrat
+                    else if (ratio > 0.9) score -= 40;  // modérée si proche du plafond
                     else score -= ratio * 15;
 
                     // Rôle principal
@@ -1335,13 +1344,23 @@ function autoFillWeek() {
     });
 
     // ============== PHASE 4 : Compensation des heures (équité) ==============
-    // Pour chaque employé largement en dessous de son objectif (>5h en déficit),
-    // chercher des shifts vacants ou en double pour compenser
-    s.employees.forEach(emp => {
+    // Pour chaque employé en dessous de son objectif (>3h de déficit),
+    // chercher des shifts vacants ou en double pour compenser.
+    // On trie par déficit le plus FORT en premier (cumulé sem + mois).
+    const empForCompensation = s.employees
+        .map(emp => {
+            const monthlyDeficit = -empHistory[emp.id].balance; // négatif si en surplus
+            const weeklyDeficit = emp.hoursPerWeek - empHoursThisWeek[emp.id];
+            return { emp, totalDeficit: weeklyDeficit + monthlyDeficit / 2 };
+        })
+        .filter(x => x.totalDeficit > 3)
+        .sort((a, b) => b.totalDeficit - a.totalDeficit);
+
+    empForCompensation.forEach(({ emp }) => {
         const target = emp.hoursPerWeek;
         const current = empHoursThisWeek[emp.id];
         const deficit = target - current;
-        if (deficit < 5) return;
+        if (deficit < 3) return;
         if (empDaysThisWeek[emp.id] >= 6) return;
 
         for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
